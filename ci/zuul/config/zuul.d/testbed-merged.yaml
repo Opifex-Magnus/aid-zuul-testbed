@@ -1,9 +1,0 @@
-# Added on main by the test bed, to see a change to the config project take effect once it is merged.
-- pipeline:
-    name: testbed-merged
-    manager: independent
-    trigger:
-      github:
-        - event: pull_request
-          action: comment
-          comment: ^never$
