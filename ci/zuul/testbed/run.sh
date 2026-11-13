@@ -67,19 +67,17 @@ sed "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" "$here/main.yaml" > "$work/etc/main.y
 chmod -R a+rX "$work/etc"
 
 echo "== patch"
-# Zuul reads the repository's branch protection rules for every pull request (its "can merge" query), which needs the
-# repository's administration permission. A workflow's token cannot have it (ThunderBox's GitHub App gets it, #1344),
-# so GitHub answers with no rules at all, which Zuul 14.3.0 does not expect: the event fails with a TypeError. The test
-# bed changes those lines so that Zuul reads it as an unprotected branch, and mounts the file into each service.
+# The test bed's token cannot read branch protection, which Zuul asks for on every pull request: patch.py says why,
+# and changes copies of the two files of Zuul's GitHub driver that do, which compose.yaml mounts into each service.
 scheduler=$(sed -n 's/^ZUUL_SCHEDULER_IMAGE=//p' "$here/testbed.env")
-graphql=$(docker run --rm --quiet --entrypoint python3 "$scheduler" -c 'import zuul.driver.github.graphql as g; print(g.__file__)')
-docker run --rm --quiet --entrypoint cat "$scheduler" "$graphql" > "$work/graphql.py"
-line="            if not rules_pageinfo['hasNextPage']:"
-# Two queries read the rules this way, the "can merge" query and the branch protection query: both get the patch.
-[ "$(grep -cxF "$line" "$work/graphql.py")" -eq 2 ] || { echo "Zuul's graphql/__init__.py no longer has the two lines the test bed patches" >&2; exit 1; }
-sed -i "s/^            if not rules_pageinfo\['hasNextPage'\]:$/            if not rules_pageinfo or not rules_pageinfo['hasNextPage']:/" "$work/graphql.py"
-chmod 644 "$work/graphql.py"
-export ZUUL_GRAPHQL_PY=$graphql
+graphql=$(docker run --rm --quiet --entrypoint python3 "$scheduler" -c \
+  'import os, zuul.driver.github.graphql as g; print(os.path.dirname(g.__file__))')
+mkdir -p "$work/graphql-original"
+docker run --rm --quiet --entrypoint tar "$scheduler" -C "$graphql" -c __init__.py canmerge.graphql \
+  | tar -x -C "$work/graphql-original"
+python3 -I -B "$here/patch.py" "$work/graphql-original" "$work/graphql"
+chmod -R a+rX "$work/graphql"
+export ZUUL_GRAPHQL=$graphql
 
 echo "== start"
 "${compose[@]}" build --quiet node

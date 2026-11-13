@@ -17,8 +17,9 @@ x-zuul: &zuul
   volumes:
     - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
     - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
-    # run.sh's one-line patch for the test bed's token, which cannot read branch protection ("== patch" there).
-    - ${TESTBED_WORK:?}/graphql.py:${ZUUL_GRAPHQL_PY:-/nonexistent}:ro
+    # The test bed's change for its token, which cannot read branch protection (patch.py).
+    - ${TESTBED_WORK:?}/graphql/__init__.py:${ZUUL_GRAPHQL:?}/__init__.py:ro
+    - ${TESTBED_WORK:?}/graphql/canmerge.graphql:${ZUUL_GRAPHQL:?}/canmerge.graphql:ro
 
 services:
   zookeeper:
@@ -87,7 +88,8 @@ services:
     volumes:
       - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
       - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
-      - ${TESTBED_WORK:?}/graphql.py:${ZUUL_GRAPHQL_PY:-/nonexistent}:ro
+      - ${TESTBED_WORK:?}/graphql/__init__.py:${ZUUL_GRAPHQL:?}/__init__.py:ro
+      - ${TESTBED_WORK:?}/graphql/canmerge.graphql:${ZUUL_GRAPHQL:?}/canmerge.graphql:ro
       # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa.
       - ${TESTBED_WORK:?}/ssh:/var/lib/zuul/.ssh:ro
     networks: [zuul]
