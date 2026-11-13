@@ -66,6 +66,20 @@ cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" > "$work/etc/z
 sed "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" "$here/main.yaml" > "$work/etc/main.yaml"
 chmod -R a+rX "$work/etc"
 
+echo "== patch"
+# Zuul reads the repository's branch protection rules for every pull request (its "can merge" query), which needs the
+# repository's administration permission. A workflow's token cannot have it (ThunderBox's GitHub App gets it, #1344),
+# so GitHub answers with no rules at all, which Zuul 14.3.0 does not expect: the event fails with a TypeError. The test
+# bed changes that one line so that Zuul reads it as an unprotected branch, and mounts the file into each service.
+scheduler=$(sed -n 's/^ZUUL_SCHEDULER_IMAGE=//p' "$here/testbed.env")
+graphql=$(docker run --rm --quiet --entrypoint python3 "$scheduler" -c 'import zuul.driver.github.graphql as g; print(g.__file__)')
+docker run --rm --quiet --entrypoint cat "$scheduler" "$graphql" > "$work/graphql.py"
+line="            if not rules_pageinfo['hasNextPage']:"
+[ "$(grep -cxF "$line" "$work/graphql.py")" -eq 1 ] || { echo "Zuul's graphql/__init__.py no longer has the line the test bed patches" >&2; exit 1; }
+sed -i "s/^            if not rules_pageinfo\['hasNextPage'\]:$/            if not rules_pageinfo or not rules_pageinfo['hasNextPage']:/" "$work/graphql.py"
+chmod 644 "$work/graphql.py"
+export ZUUL_GRAPHQL_PY=$graphql
+
 echo "== start"
 "${compose[@]}" build --quiet node
 "${compose[@]}" up --detach --quiet-pull

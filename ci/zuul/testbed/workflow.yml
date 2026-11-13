@@ -7,6 +7,8 @@ permissions:
   pull-requests: write
   issues: write
   statuses: write
+  # Zuul reads the pull request's check runs.
+  checks: read
 concurrency:
   group: testbed
   cancel-in-progress: false

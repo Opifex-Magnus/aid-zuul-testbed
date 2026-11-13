@@ -17,6 +17,8 @@ x-zuul: &zuul
   volumes:
     - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
     - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+    # run.sh's one-line patch for the test bed's token, which cannot read branch protection ("== patch" there).
+    - ${TESTBED_WORK:?}/graphql.py:${ZUUL_GRAPHQL_PY:-/nonexistent}:ro
 
 services:
   zookeeper:
@@ -27,9 +29,11 @@ services:
       - ../../../deploy/zuul/server/zoo.cfg:/conf/zoo.cfg:ro
       - ${TESTBED_WORK:?}/zookeeper-tls:/tls:ro
     healthcheck:
+      # A TCP connection, which ZooKeeper logs as a failed TLS handshake: every 2 s while it starts, then every 5 min.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/2281"]
-      interval: 2s
-      retries: 60
+      start_period: 120s
+      start_interval: 2s
+      interval: 300s
     networks:
       zuul:
         aliases: [zookeeper.zuul.svc.cluster.local]
@@ -43,8 +47,9 @@ services:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?}
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 2s
-      retries: 60
+      start_period: 120s
+      start_interval: 2s
+      interval: 300s
     networks:
       zuul:
         aliases: [db.zuul.svc.cluster.local]
@@ -82,6 +87,7 @@ services:
     volumes:
       - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
       - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+      - ${TESTBED_WORK:?}/graphql.py:${ZUUL_GRAPHQL_PY:-/nonexistent}:ro
       # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa.
       - ${TESTBED_WORK:?}/ssh:/var/lib/zuul/.ssh:ro
     networks: [zuul]
