@@ -9,6 +9,10 @@
         config-projects:
           - @CONFIG_REPOSITORY@:
               load-branch: main
+              # Its own check, which needs to know how GitHub may merge into it: the run's token, which cannot push
+              # there, is told no way at all, and Zuul refuses the stanza ("Merge mode merge not supported").
+              exclude:
+                - project
               # The test bed's build node, which sync.sh adds to the copy.
               extra-config-paths:
                 - testbed/

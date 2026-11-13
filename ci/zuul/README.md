@@ -114,7 +114,9 @@ branch. ThunderBox's GitHub App (#1344) needs `Administration: read` for the sam
 It runs in two public repositories of your own, for example `<you>/aid-zuul-testbed` and
 `<you>/aid-zuul-config-testbed`, holding copies made by [`testbed/sync.sh`](testbed/sync.sh): of this folder and the
 few files Zuul needs, and of an aid-zuul-config checkout. It has no secret: the run makes its keys and passwords, and
-Zuul uses the workflow's own `GITHUB_TOKEN`, which reads the public config copy too. Once, make both repositories, and
+Zuul uses the workflow's own `GITHUB_TOKEN`, which reads the public config copy too. The config copy makes
+aid-zuul-config's files public, which is safe only while they hold no secret in the clear: a secret there is encrypted
+for ThunderBox's project key (#1351), which no test bed has. Once, make both repositories, and
 let the test bed's workflows open pull requests:
 
 ```sh
