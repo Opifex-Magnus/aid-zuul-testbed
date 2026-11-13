@@ -90,8 +90,9 @@ services:
       - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
       - ${TESTBED_WORK:?}/graphql/__init__.py:${ZUUL_GRAPHQL:?}/__init__.py:ro
       - ${TESTBED_WORK:?}/graphql/canmerge.graphql:${ZUUL_GRAPHQL:?}/canmerge.graphql:ro
-      # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa.
-      - ${TESTBED_WORK:?}/ssh:/var/lib/zuul/.ssh:ro
+      # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa, of the
+      # image's user, root.
+      - ${TESTBED_WORK:?}/ssh:/root/.ssh:ro
     networks: [zuul]
 
   # The build node, a stand-in for #1345's: the static provider in zuul.d/providers.yaml names it.

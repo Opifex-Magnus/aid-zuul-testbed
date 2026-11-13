@@ -53,11 +53,11 @@ mkdir -p "$work/zookeeper-tls" "$work/client-tls" "$work/etc" "$work/ssh"
 unpack zookeeper-tls keystore.pem "$work/zookeeper-tls/keystore.pem"
 unpack zookeeper-tls ca.crt "$work/zookeeper-tls/ca.crt"
 for key in tls.crt tls.key ca.crt; do unpack zuul-zookeeper-client "$key" "$work/client-tls/$key"; done
-# The services run as their images' users, ZooKeeper's 1000 and Zuul's 10001; these keys are the run's own.
+# The services run as their images' users, ZooKeeper's 1000 and Zuul's 10001 (the executor as root); these keys are
+# the run's own.
 chmod -R a+rX "$work/zookeeper-tls" "$work/client-tls"
 ssh-keygen -q -t ed25519 -N '' -C zuul-testbed -f "$work/ssh/id_rsa"
 chmod 644 "$work/ssh/id_rsa.pub"
-sudo chown -R 10001:10001 "$work/ssh"
 
 echo "== configuration"
 # The deployment's zuul.conf, plus the test bed's connections; the deployment's tenant file is replaced by the test
