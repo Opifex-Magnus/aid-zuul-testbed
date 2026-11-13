@@ -1,0 +1,6 @@
+# One Bazel command, in the checkout of the project under test. `bazel` is the node's Bazelisk (#1345), which runs the
+# version .bazelversion pins.
+- name: "bazel {{ bazel_command }}"
+  ansible.builtin.command:
+    argv: "{{ ['bazel', bazel_command] + bazel_flags + ['--'] + bazel_targets }}"
+    chdir: "{{ zuul.project.src_dir }}"

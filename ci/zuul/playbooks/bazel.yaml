@@ -1,0 +1,4 @@
+# The run playbook of aid-bazel (zuul.d/jobs.yaml).
+- hosts: all
+  roles:
+    - bazel

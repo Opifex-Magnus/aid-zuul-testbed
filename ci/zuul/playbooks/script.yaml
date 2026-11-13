@@ -1,0 +1,4 @@
+# The run playbook of aid-script (zuul.d/jobs.yaml).
+- hosts: all
+  roles:
+    - script

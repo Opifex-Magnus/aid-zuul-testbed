@@ -1,0 +1,77 @@
+# The pipelines (https://zuul-ci.org/docs/zuul/latest/config/pipeline.html). Trusted: a pull request's change to this
+# file takes effect only once it is merged (ci/zuul/README.md, "Trusted and untrusted").
+#
+# The first two, shaped as in the trial (#1342), which saw them work on GitHub. #1347 maps Mergify's rules onto them
+# (what enters the gate, the hold label, the window, the merge mode), and #1344 moves the reports from commit statuses
+# to check runs once Zuul has its GitHub App.
+
+- pipeline:
+    name: check
+    description: Runs on every new or changed pull request, with the pull request's own job changes.
+    manager: independent
+    trigger:
+      github:
+        - event: pull_request
+          action: [opened, changed, reopened]
+        - event: pull_request
+          action: comment
+          comment: (?i)^\s*recheck\s*$
+    start:
+      github:
+        status: pending
+        comment: false
+    success:
+      github:
+        status: success
+        comment: false
+    failure:
+      github:
+        status: failure
+        comment: true
+    dequeue:
+      github:
+        comment: false
+
+- pipeline:
+    name: gate
+    description: Pull requests labelled "gate" are tested in order, each on top of those ahead of it, and merged if they pass.
+    manager: dependent
+    precedence: high
+    supercedes: check
+    require:
+      github:
+        label: gate
+        open: true
+        current-patchset: true
+    reject:
+      github:
+        label: hold
+    trigger:
+      github:
+        - event: pull_request
+          action: labeled
+          label: [gate]
+        - event: pull_request
+          action: unlabeled
+          label: [hold]
+    enqueue:
+      github:
+        status: pending
+        comment: false
+    start:
+      github:
+        status: pending
+        comment: false
+    success:
+      github:
+        status: success
+        comment: false
+        merge: true
+    failure:
+      github:
+        status: failure
+        comment: true
+        unlabel: gate
+    dequeue:
+      github:
+        comment: false

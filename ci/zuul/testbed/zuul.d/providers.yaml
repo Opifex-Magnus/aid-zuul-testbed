@@ -1,0 +1,33 @@
+# The test bed's build node (compose.yaml's `node`), for the label the base job asks for. Loaded only by the test
+# bed's tenant (main.yaml), as part of the config project; on ThunderBox the label's provider comes with #1345.
+- image:
+    name: testbed-node
+    type: cloud
+
+- flavor:
+    name: testbed
+
+- label:
+    name: aid-node
+    image: testbed-node
+    flavor: testbed
+
+- section:
+    name: testbed
+    connection: static
+    flavors:
+      - name: testbed
+
+- provider:
+    name: testbed
+    section: testbed
+    nodes:
+      - name: node
+        label: aid-node
+        connection-port: 22
+    labels:
+      - name: aid-node
+    images:
+      - name: testbed-node
+        python-path: /usr/bin/python3
+        username: zuul

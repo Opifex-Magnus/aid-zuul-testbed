@@ -1,0 +1,97 @@
+# The test bed's Zuul (README.md, "The test bed"), in Docker Compose, started by run.sh in a copy of the layout
+# (sync.sh). The same images, ZooKeeper configuration and zuul.conf as ThunderBox's (deploy/zuul/), under the names the
+# deployment's zuul.conf uses, plus the connections and a build node that only the test bed has. Everything it holds
+# lives as long as the run: run.sh makes the keys and passwords, in $TESTBED_WORK.
+name: zuul-testbed
+
+x-zuul: &zuul
+  restart: on-failure
+  depends_on:
+    zookeeper: {condition: service_healthy}
+    db: {condition: service_healthy}
+  environment: &zuul-env
+    ZUUL_KEYSTORE_PASSWORD: ${ZUUL_KEYSTORE_PASSWORD:?}
+    ZUUL_DB_PASSWORD: ${ZUUL_DB_PASSWORD:?}
+    ZUUL_GITHUB_TOKEN: ${ZUUL_GITHUB_TOKEN:?}
+    ZUUL_WEBHOOK_TOKEN: ${ZUUL_WEBHOOK_TOKEN:?}
+  volumes:
+    - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
+    - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+
+services:
+  zookeeper:
+    image: ${ZOOKEEPER_IMAGE:?}
+    environment:
+      ZK_SERVER_HEAP: "256"
+    volumes:
+      - ../../../deploy/zuul/server/zoo.cfg:/conf/zoo.cfg:ro
+      - ${TESTBED_WORK:?}/zookeeper-tls:/tls:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/2281"]
+      interval: 2s
+      retries: 60
+    networks:
+      zuul:
+        aliases: [zookeeper.zuul.svc.cluster.local]
+
+  db:
+    image: ${MARIADB_IMAGE:?}
+    environment:
+      MARIADB_DATABASE: zuul
+      MARIADB_USER: zuul
+      MARIADB_PASSWORD: ${ZUUL_DB_PASSWORD:?}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 60
+    networks:
+      zuul:
+        aliases: [db.zuul.svc.cluster.local]
+
+  scheduler:
+    <<: *zuul
+    image: ${ZUUL_SCHEDULER_IMAGE:?}
+    command: ["zuul-scheduler", "-f"]
+    networks: [zuul]
+
+  web:
+    <<: *zuul
+    image: ${ZUUL_WEB_IMAGE:?}
+    command: ["zuul-web", "-f"]
+    ports: ["127.0.0.1:9000:9000"]
+    networks:
+      zuul:
+        aliases: [web.zuul.svc.cluster.local]
+
+  launcher:
+    <<: *zuul
+    image: ${ZUUL_LAUNCHER_IMAGE:?}
+    command: ["zuul-launcher", "-f"]
+    networks: [zuul]
+
+  executor:
+    <<: *zuul
+    image: ${ZUUL_EXECUTOR_IMAGE:?}
+    command: ["zuul-executor", "-f"]
+    # Bubblewrap, as on ThunderBox (deploy/zuul/README.md, "The executor").
+    privileged: true
+    environment:
+      <<: *zuul-env
+      ZUUL_EXECUTOR_HOSTNAME: executor
+    volumes:
+      - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
+      - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+      # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa.
+      - ${TESTBED_WORK:?}/ssh:/var/lib/zuul/.ssh:ro
+    networks: [zuul]
+
+  # The build node, a stand-in for #1345's: the static provider in zuul.d/providers.yaml names it.
+  node:
+    build: node
+    volumes:
+      - ${TESTBED_WORK:?}/ssh/id_rsa.pub:/home/zuul/.ssh/authorized_keys:ro
+    networks: [zuul]
+
+networks:
+  zuul: {}

@@ -1,0 +1,10 @@
+# Which of AID's jobs run in which pipeline (https://zuul-ci.org/docs/zuul/latest/config/project.html). The pipelines
+# are trusted (ci/zuul/config/zuul.d/pipelines.yaml); this list is not, so a pull request that adds a job here runs
+# it on itself.
+- project:
+    check:
+      jobs:
+        - aid-seam-lint
+    gate:
+      jobs:
+        - aid-seam-lint

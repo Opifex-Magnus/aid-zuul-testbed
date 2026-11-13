@@ -1,0 +1,25 @@
+# The test bed's workflow (../README.md, "The test bed"). sync.sh copies it into the test bed's repository as
+# .github/workflows/testbed.yml; it runs only when dispatched: gh workflow run testbed.yml --repo <owner>/<name>
+name: Zuul test bed
+on: workflow_dispatch
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  statuses: write
+concurrency:
+  group: testbed
+  cancel-in-progress: false
+jobs:
+  testbed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The layout of ci/zuul/ on Zuul
+        run: ci/zuul/testbed/run.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TESTBED_REPOSITORY: ${{ github.repository }}

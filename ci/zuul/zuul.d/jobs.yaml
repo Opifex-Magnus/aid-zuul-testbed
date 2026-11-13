@@ -1,0 +1,39 @@
+# AID's jobs (https://zuul-ci.org/docs/zuul/latest/config/job.html). Untrusted: a pull request that changes this file,
+# a playbook or a role under ci/zuul/playbooks/, or a script they run, is tested with its own changes
+# (ci/zuul/README.md, "Adding or changing a job").
+#
+# The library: two abstract jobs, one for a Bazel command and one for a script from the repository. Every job of AID's
+# is one of them with its variables set. Each inherits `base` (ci/zuul/config/zuul.d/jobs.yaml), which checks the
+# code out; neither holds build logic, which stays in Bazel and in the scripts.
+
+- job:
+    name: aid-bazel
+    abstract: true
+    description: |
+      Runs one Bazel command in the checkout: `bazel <bazel_command> <bazel_flags> -- <bazel_targets>`.
+    run: ci/zuul/playbooks/bazel.yaml
+    vars:
+      bazel_command: test
+      bazel_flags: []
+      bazel_targets: ["//..."]
+
+- job:
+    name: aid-script
+    abstract: true
+    description: |
+      Runs one script from the repository in the checkout: `<script> <script_args>`, where `script` is a path under
+      ci/ or scripts/.
+    run: ci/zuul/playbooks/script.yaml
+    vars:
+      script_args: []
+
+# AID's own jobs.
+
+- job:
+    name: aid-seam-lint
+    parent: aid-script
+    description: The seam rule (CLAUDE.md), as CI's seam-lint step runs it.
+    timeout: 600
+    vars:
+      script: scripts/seam-lint.sh
+      script_args: [--project, aid]

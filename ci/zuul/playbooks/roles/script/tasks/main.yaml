@@ -1,0 +1,12 @@
+# One script from the repository, in the checkout of the project under test. Only a script under ci/ or scripts/: what
+# CI runs is kept where it can be run and tested outside Zuul too (#1341).
+- name: "The script is under ci/ or scripts/"
+  ansible.builtin.assert:
+    that:
+      - script is match('^(ci|scripts)/[^ ]+$')
+      - "'..' not in script.split('/')"
+    fail_msg: "aid-script runs only a script under ci/ or scripts/, not '{{ script }}'"
+- name: "{{ script }}"
+  ansible.builtin.command:
+    argv: "{{ ['./' + script] + script_args }}"
+    chdir: "{{ zuul.project.src_dir }}"
