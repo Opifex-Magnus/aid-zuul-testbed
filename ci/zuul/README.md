@@ -34,9 +34,11 @@ AIDepartment", 2026-11-13). Zuul takes the repository twice, as two projects wit
 - **AID's project** comes from the GitHub connection, as `github.com/kristofk/AIDepartment`, and reads only
   `ci/zuul/zuul.d/` (its `extra-config-paths`). Zuul sees its pull requests, tests them and merges them.
 - **The config project** comes from a git connection, `aid-config`, with a host name of its own
-  (`canonical_hostname=aid-config`), as `aid-config/kristofk/AIDepartment`. It reads only `ci/zuul/config/zuul.d/`, and
-  only from `main` (`load-branch: main`), which Zuul polls. No pull request reaches it: Zuul learns of a change to it
-  when the merge lands on `main`, at the next poll.
+  (`canonical_hostname=aid-config`) and the owner in its base URL (`https://github.com/kristofk`), as
+  `aid-config/AIDepartment`. It reads only `ci/zuul/config/zuul.d/`, and only from `main` (`load-branch: main`), which
+  Zuul polls. No pull request reaches it: Zuul learns of a change to it when the merge lands on `main`, at the next
+  poll. Its short name, `AIDepartment`, must differ from AID's project's: Zuul 14.3.0 looks a job's playbook up by the
+  short name alone, and fails the build when two projects share it (the test bed found it).
 
 Two rules keep the halves apart, and [`check.mjs`](check.mjs) checks both:
 
@@ -123,6 +125,12 @@ Zuul has no route from GitHub there, so the test bed sends Zuul the `pull_reques
 connection's webhook token. The build node is a container with Bazelisk, a stand-in for #1345's; its provider,
 [`testbed/zuul.d/providers.yaml`](testbed/zuul.d/providers.yaml), is loaded only by the test bed's tenant.
 
+One thing differs from ThunderBox's Zuul: the token. For every pull request, Zuul's GitHub driver asks for the
+repository's branch protection rules, which need the repository's **administration** permission. A workflow's token
+cannot have it, and GitHub then answers with no repository at all, which Zuul fails on. So the test bed changes its
+copy of that query to leave the rules out ([`testbed/patch.py`](testbed/patch.py)), and Zuul sees an unprotected
+branch. ThunderBox's GitHub App (#1344) needs `Administration: read` for the same reason.
+
 It runs in a public repository of your own, for example `<you>/aid-zuul-testbed`, holding a copy of this folder and
 the few files Zuul needs, made by [`testbed/sync.sh`](testbed/sync.sh). It has no secret: the run makes its keys and
 passwords, and Zuul uses the workflow's own `GITHUB_TOKEN`. Once, make the repository, and let its workflows open pull
@@ -160,7 +168,7 @@ Zuul's job library until #1344 connects GitHub. Then it takes this layout, as th
     source:
       aid-config:
         config-projects:
-          - kristofk/AIDepartment:
+          - AIDepartment:
               load-branch: main
               extra-config-paths: [ci/zuul/config/zuul.d/]
       github:
@@ -180,15 +188,15 @@ and `zuul.conf` the config project's connection, beside #1344's `[connection "gi
 ```ini
 [connection "aid-config"]
 driver=git
-baseurl=https://github.com
+baseurl=https://github.com/kristofk
 canonical_hostname=aid-config
 poll_delay=60
 ```
 
 While the repository is private, the git connection needs read access. A token in `baseurl` would show in Zuul's API
-(`/api/connections`), so the way is SSH: `baseurl=ssh://git@github.com`, with a read-only deploy key in the
-scheduler's and the executor's `~/.ssh` (#1344, #1351). Once the repository is public, `https://github.com` needs
-nothing.
+(`/api/connections`), so the way is SSH: `baseurl=ssh://git@github.com/kristofk`, with a read-only deploy key in the
+scheduler's and the executor's `~/.ssh` (#1344, #1351). Once the repository is public, `https://github.com/kristofk`
+needs nothing.
 
 ## Checks
 

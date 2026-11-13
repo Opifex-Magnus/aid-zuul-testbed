@@ -235,7 +235,8 @@ def layout_loads(bed):
     expect(errors == [], f"the tenant has no configuration error {[error.get('error', '')[:300] for error in errors]}")
     _, projects = bed.zuul.get("/projects")
     found = {(project["canonical_name"], project["type"]) for project in projects}
-    expect((f"aid-config/{bed.args.repository}", "config") in found, "the repository is the config project, as aid-config")
+    name = bed.args.repository.split("/")[1]
+    expect((f"aid-config/{name}", "config") in found, f"the repository is the config project, as aid-config/{name}")
     expect((f"github.com/{bed.args.repository}", "untrusted") in found, "the repository is AID's untrusted project, from GitHub")
     _, jobs = bed.zuul.get("/jobs")
     expect({"base", "aid-bazel", "aid-script", "aid-seam-lint"} <= {job["name"] for job in jobs},

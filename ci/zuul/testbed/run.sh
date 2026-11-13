@@ -62,8 +62,10 @@ sudo chown -R 10001:10001 "$work/ssh"
 echo "== configuration"
 # The deployment's zuul.conf, plus the test bed's connections; the deployment's tenant file is replaced by the test
 # bed's, with the repository put in.
-cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" > "$work/etc/zuul.conf"
-sed "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" "$here/main.yaml" > "$work/etc/main.yaml"
+[[ "$TESTBED_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "TESTBED_REPOSITORY is not owner/name" >&2; exit 2; }
+owner=${TESTBED_REPOSITORY%/*} name=${TESTBED_REPOSITORY#*/}
+cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" | sed "s#@OWNER@#$owner#g" > "$work/etc/zuul.conf"
+sed -e "s#@OWNER@#$owner#g" -e "s#@NAME@#$name#g" "$here/main.yaml" > "$work/etc/main.yaml"
 chmod -R a+rX "$work/etc"
 
 echo "== patch"
