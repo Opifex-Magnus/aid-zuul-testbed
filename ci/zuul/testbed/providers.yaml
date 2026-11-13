@@ -1,5 +1,6 @@
-# The test bed's build node (compose.yaml's `node`), for the label the base job asks for. Loaded only by the test
-# bed's tenant (main.yaml), as part of the config project; on ThunderBox the label's provider comes with #1345.
+# The test bed's build node (compose.yaml's `node`), for the label the base job asks for. sync.sh puts it into the
+# config project's copy, as testbed/providers.yaml, which only the test bed's tenant reads (main.yaml); on ThunderBox
+# the label's provider comes with #1345, in kristofk/aid-zuul-config.
 - image:
     name: testbed-node
     type: cloud

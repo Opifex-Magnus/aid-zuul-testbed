@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
-# sync.sh: copies the layout of ci/zuul/ into a checkout of a test bed's repository (../README.md, "The test bed"):
-#   ci/zuul/testbed/sync.sh /path/to/testbed-checkout
-# Everything in the checkout but .git is replaced by: ci/zuul/; from deploy/zuul/ the zuul.conf, ZooKeeper's
-# configuration and secrets.sh, and the images ThunderBox runs (as testbed.env); what AID's jobs run (a stand-in for the
-# seam rule's script, .bazelversion, an empty MODULE.bazel); the workflow; and TESTBED, the AIDepartment commit it came
-# from.
-# Commit and push it to the test bed's main, then dispatch the workflow. The files of record are these; the copy is
-# only for the test.
+# sync.sh: copies the layout into the test bed's two repositories (../README.md, "The test bed"):
+#   ci/zuul/testbed/sync.sh /path/to/testbed-checkout /path/to/aid-zuul-config-checkout /path/to/config-testbed-checkout
+# The test bed's checkout gets: ci/zuul/; from deploy/zuul/ the zuul.conf, ZooKeeper's configuration and secrets.sh, and
+# the images ThunderBox runs (as testbed.env, with the config copy's repository); what AID's jobs run (a stand-in for
+# the seam rule's script, .bazelversion, an empty MODULE.bazel); the workflow; and TESTBED, the commits it came from.
+# The config copy's checkout gets the aid-zuul-config checkout's files, as they are on disk, plus the test bed's build
+# node (testbed/providers.yaml) and the same TESTBED. Everything in either checkout but .git is replaced. Commit and push
+# both to their main, the config copy first, then dispatch the workflow. The files of record are AIDepartment's and
+# aid-zuul-config's; the copies are only for the test.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../../.." && pwd)
-[ $# -eq 1 ] && [ -d "$1/.git" ] || { echo "usage: $0 /path/to/testbed-checkout" >&2; exit 2; }
-dest=$(cd "$1" && pwd)
-[ "$dest" != "$root" ] || { echo "$dest is this repository, not a test bed's" >&2; exit 2; }
+usage() { echo "usage: $0 /path/to/testbed-checkout /path/to/aid-zuul-config-checkout /path/to/config-testbed-checkout" >&2; exit 2; }
+[ $# -eq 3 ] && [ -d "$1/.git" ] && [ -d "$2/.git" ] && [ -d "$3/.git" ] || usage
+dest=$(cd "$1" && pwd) config=$(cd "$2" && pwd) config_dest=$(cd "$3" && pwd)
+for copy in "$dest" "$config_dest"; do
+  [ "$copy" != "$root" ] && [ "$copy" != "$config" ] || { echo "$copy is a repository of record, not a test bed's copy" >&2; exit 2; }
+done
+# The config copy's repository, owner/name, from its checkout's origin.
+config_repository=$(git -C "$config_dest" remote get-url origin | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
+[[ "$config_repository" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "the config copy's origin is not a GitHub repository" >&2; exit 2; }
 
-find "$dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+find "$dest" "$config_dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+(cd "$config" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} "$config_dest/" \;)
+mkdir -p "$config_dest/testbed"
+cp "$here/providers.yaml" "$config_dest/testbed/"
 mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/scripts" "$dest/.github/workflows"
 cp -R "$root/ci/zuul" "$dest/ci/zuul"
 cp "$root/deploy/zuul/server/config/zuul.conf" "$dest/deploy/zuul/server/config/"
@@ -50,7 +60,8 @@ pinned() { # pinned <manifest>: its one image
   echo "$image"
 }
 {
-  echo "# The images ThunderBox runs, from deploy/zuul/ (sync.sh)."
+  echo "# The config project's copy, and the images ThunderBox runs, from deploy/zuul/ (sync.sh)."
+  echo "TESTBED_CONFIG_REPOSITORY=$config_repository"
   echo "ZUUL_SCHEDULER_IMAGE=$(zuul_image scheduler)"
   echo "ZUUL_WEB_IMAGE=$(zuul_image web)"
   echo "ZUUL_LAUNCHER_IMAGE=$(zuul_image launcher)"
@@ -59,9 +70,14 @@ pinned() { # pinned <manifest>: its one image
   echo "MARIADB_IMAGE=$(pinned database.yaml)"
 } > "$dest/ci/zuul/testbed/testbed.env"
 
-commit=$(git -C "$root" rev-parse HEAD)
-dirty=$(git -C "$root" status --porcelain -- ci/zuul deploy/zuul .bazelversion | wc -l)
-printf 'A copy of kristofk/AIDepartment ci/zuul at %s%s, for its Zuul test bed (ci/zuul/README.md).\n' "$commit" \
-  "$([ "$dirty" -eq 0 ] || echo ", with uncommitted changes")" > "$dest/TESTBED"
-echo "copied into $dest: $(cat "$dest/TESTBED")"
+# What each copy came from: each repository's commit, and whether its checkout had changes not committed.
+from() { # from <checkout> <repository> [<path>...]
+  local dirty
+  dirty=$(git -C "$1" status --porcelain -- "${@:3}" | wc -l)
+  printf '%s at %s%s' "$2" "$(git -C "$1" rev-parse HEAD)" "$([ "$dirty" -eq 0 ] || echo ", with uncommitted changes")"
+}
+printf 'Copies of %s and %s, for the Zuul test bed (ci/zuul/README.md).\n' \
+  "$(from "$root" "kristofk/AIDepartment ci/zuul" ci/zuul deploy/zuul .bazelversion)" \
+  "$(from "$config" kristofk/aid-zuul-config)" | tee "$dest/TESTBED" > "$config_dest/TESTBED"
+echo "copied into $dest and $config_dest: $(cat "$dest/TESTBED")"
 cat "$dest/ci/zuul/testbed/testbed.env"

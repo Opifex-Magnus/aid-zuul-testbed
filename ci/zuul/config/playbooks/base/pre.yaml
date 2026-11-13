@@ -1,8 +1,0 @@
-# The base job's pre-run (zuul.d/jobs.yaml). Both roles are Zuul's own (zuul/zuul-jobs).
-- hosts: all
-  roles:
-    # The live log of a running job, which zuul-web streams from the node's console daemon.
-    - start-zuul-console
-    # Checks out the code: every project of the job, at the state Zuul prepared (the change under test merged onto
-    # its branch, and onto the changes ahead of it in the gate).
-    - prepare-workspace-git

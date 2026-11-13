@@ -6,12 +6,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The two halves (README.md, "One repository, two projects"), as the tenants name them in extra-config-paths.
-export const TRUSTED = "ci/zuul/config/zuul.d/";
+// AID's project: where Zuul reads its configuration (extra-config-paths) and where its playbooks are. The trusted half
+// is kristofk/aid-zuul-config (README.md, "Trusted and untrusted").
 export const UNTRUSTED = "ci/zuul/zuul.d/";
-// Where each half's playbooks are.
-const PLAYBOOKS = { [TRUSTED]: "ci/zuul/config/playbooks/", [UNTRUSTED]: "ci/zuul/playbooks/" };
-// What Zuul reads for every project, so the config project too.
+const PLAYBOOKS = "ci/zuul/playbooks/";
+// What Zuul reads for every project before extra-config-paths: AID's jobs would have a second place.
 const ROOT_CONFIG = ["zuul.yaml", "zuul.d", ".zuul.yaml", ".zuul.d"];
 // The library's two jobs, which every job of AID's is or inherits.
 const LIBRARY = ["aid-bazel", "aid-script"];
@@ -103,48 +102,41 @@ export function check(root) {
   const read = (path) => readFileSync(at(path), "utf8");
 
   for (const name of ROOT_CONFIG) {
-    if (existsSync(at(name))) problems.push(`${name} at the repository's root: Zuul would load it for both projects, the config project's as trusted`);
+    if (existsSync(at(name))) problems.push(`${name} at the repository's root: AID's jobs are in ${UNTRUSTED}, and Zuul would read both`);
   }
-  if (TRUSTED.startsWith(UNTRUSTED) || UNTRUSTED.startsWith(TRUSTED)) problems.push(`${TRUSTED} and ${UNTRUSTED} overlap`);
 
-  // The test bed's tenant reads each half from its own project, and nothing of the other's.
+  // The test bed's tenant reads AID's project from its folder, and the config project's copy only for its build node.
   const tenant = tenantPaths(read("ci/zuul/testbed/main.yaml"));
   const configPaths = Object.values(tenant).flatMap((source) => source.config);
   const untrustedPaths = Object.values(tenant).flatMap((source) => source.untrusted);
-  if (!configPaths.includes(TRUSTED)) problems.push(`the test bed's tenant does not read ${TRUSTED} into the config project`);
   if (!untrustedPaths.includes(UNTRUSTED)) problems.push(`the test bed's tenant does not read ${UNTRUSTED} into AID's project`);
-  for (const path of untrustedPaths) {
-    if (path.startsWith("ci/zuul/config/") || "ci/zuul/config/".startsWith(path)) problems.push(`the test bed's untrusted project reads ${path}, the trusted half's`);
-  }
   for (const path of configPaths) {
-    if (path.startsWith(UNTRUSTED) || UNTRUSTED.startsWith(path)) problems.push(`the test bed's config project reads ${path}, AID's project's`);
+    if (path !== "testbed/") problems.push(`the test bed's config project reads ${path}: its copy adds only testbed/`);
   }
 
-  // Each half's jobs and their playbooks.
+  // AID's jobs and their playbooks.
   const jobs = {};
-  for (const half of [TRUSTED, UNTRUSTED]) {
-    for (const file of yamlFiles(at(half))) {
-      const where = posix.join(half, file.slice(at(half).length + 1));
-      for (const item of items(readFileSync(file, "utf8"))) {
-        if (item.kind === null) { problems.push(`${where}: a top-level line outside a "- kind:" item: ${item.lines[0]}`); continue; }
-        if (item.kind === "pipeline" && half === UNTRUSTED) problems.push(`${where}: a pipeline in AID's untrusted project`);
-        if (item.kind !== "job") continue;
-        const name = attribute(item, "name");
-        if (!name) { problems.push(`${where}: a job with no name`); continue; }
-        jobs[name] = { half, where, parent: attribute(item, "parent"), abstract: attribute(item, "abstract") === "true" };
-        for (const key of ["pre-run", "run", "post-run", "cleanup-run"]) {
-          const path = attribute(item, key);
-          if (path === undefined) continue;
-          if (path === "") { problems.push(`${where}: job ${name}'s ${key} is a list; give one playbook`); continue; }
-          if (!path.startsWith(PLAYBOOKS[half])) problems.push(`${where}: job ${name}'s ${key} ${path} is not under ${PLAYBOOKS[half]}`);
-          else if (!existsSync(at(path))) problems.push(`${where}: job ${name}'s ${key} ${path} does not exist`);
-        }
+  for (const file of yamlFiles(at(UNTRUSTED))) {
+    const where = posix.join(UNTRUSTED, file.slice(at(UNTRUSTED).length + 1));
+    for (const item of items(readFileSync(file, "utf8"))) {
+      if (item.kind === null) { problems.push(`${where}: a top-level line outside a "- kind:" item: ${item.lines[0]}`); continue; }
+      if (item.kind === "pipeline") problems.push(`${where}: a pipeline in AID's untrusted project; pipelines are kristofk/aid-zuul-config's`);
+      if (item.kind !== "job") continue;
+      const name = attribute(item, "name");
+      if (!name) { problems.push(`${where}: a job with no name`); continue; }
+      const parent = attribute(item, "parent");
+      if (parent === "null") problems.push(`${where}: ${name} is a base job (parent: null); the base job is kristofk/aid-zuul-config's`);
+      jobs[name] = { where, parent, abstract: attribute(item, "abstract") === "true" };
+      for (const key of ["pre-run", "run", "post-run", "cleanup-run"]) {
+        const path = attribute(item, key);
+        if (path === undefined) continue;
+        if (path === "") { problems.push(`${where}: job ${name}'s ${key} is a list; give one playbook`); continue; }
+        if (!path.startsWith(PLAYBOOKS)) problems.push(`${where}: job ${name}'s ${key} ${path} is not under ${PLAYBOOKS}`);
+        else if (!existsSync(at(path))) problems.push(`${where}: job ${name}'s ${key} ${path} does not exist`);
       }
     }
   }
-  if (jobs.base?.half !== TRUSTED || jobs.base.parent !== "null") problems.push(`the base job, with parent: null, is not in ${TRUSTED}`);
   for (const [name, job] of Object.entries(jobs)) {
-    if (job.half !== UNTRUSTED) continue;
     if (LIBRARY.includes(name)) {
       if (job.parent !== undefined) problems.push(`${job.where}: ${name} inherits ${job.parent}, not the base job`);
       if (!job.abstract) problems.push(`${job.where}: ${name} is not abstract`);
@@ -153,7 +145,7 @@ export function check(root) {
     // Every other job of AID's inherits one of the library's, through AID's own jobs.
     const seen = new Set([name]);
     let parent = job.parent;
-    while (parent && !LIBRARY.includes(parent) && jobs[parent]?.half === UNTRUSTED && !seen.has(parent)) {
+    while (parent && !LIBRARY.includes(parent) && jobs[parent] && !seen.has(parent)) {
       seen.add(parent);
       parent = jobs[parent].parent;
     }
@@ -161,22 +153,18 @@ export function check(root) {
   }
 
   // Every role a playbook names is beside it, and does only what a role may.
-  for (const half of Object.values(PLAYBOOKS)) {
-    for (const file of yamlFiles(at(half))) {
-      const where = posix.join(half, file.slice(at(half).length + 1));
-      for (const role of playbookRoles(readFileSync(file, "utf8"))) {
-        if (role === null) problems.push(`${where}: a roles entry in a form check.mjs does not read`);
-        else if (half === PLAYBOOKS[UNTRUSTED] && !existsSync(at(`${half}roles/${role}/tasks/main.yaml`))) {
-          problems.push(`${where}: role ${role} is not in ${half}roles/`);
-        }
-      }
+  for (const file of yamlFiles(at(PLAYBOOKS))) {
+    const where = posix.join(PLAYBOOKS, file.slice(at(PLAYBOOKS).length + 1));
+    for (const role of playbookRoles(readFileSync(file, "utf8"))) {
+      if (role === null) problems.push(`${where}: a roles entry in a form check.mjs does not read`);
+      else if (!existsSync(at(`${PLAYBOOKS}roles/${role}/tasks/main.yaml`))) problems.push(`${where}: role ${role} is not in ${PLAYBOOKS}roles/`);
     }
   }
-  const roles = at(`${PLAYBOOKS[UNTRUSTED]}roles`);
+  const roles = at(`${PLAYBOOKS}roles`);
   for (const role of existsSync(roles) ? readdirSync(roles).sort() : []) {
-    const tasks = `${PLAYBOOKS[UNTRUSTED]}roles/${role}/tasks/main.yaml`;
+    const tasks = `${PLAYBOOKS}roles/${role}/tasks/main.yaml`;
     if (!existsSync(at(tasks))) { problems.push(`role ${role} has no tasks/main.yaml`); continue; }
-    const others = readdirSync(at(`${PLAYBOOKS[UNTRUSTED]}roles/${role}`)).filter((name) => !["tasks", "defaults"].includes(name));
+    const others = readdirSync(at(`${PLAYBOOKS}roles/${role}`)).filter((name) => !["tasks", "defaults"].includes(name));
     if (others.length) problems.push(`role ${role} has ${others.join(", ")}: a role here has only tasks/ and defaults/`);
     for (const keys of taskKeys(read(tasks))) {
       const extra = keys.filter((key) => !TASK_KEYS.has(key));

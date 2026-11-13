@@ -1,21 +1,19 @@
-# The test bed's tenant (../README.md, "The test bed"): the layout of ci/zuul/ as ThunderBox's tenant takes it, read
-# from the test bed's repository, @OWNER@/@NAME@, which run.sh puts in. The same repository twice: from the git
-# connection aid-config, whose base URL holds the owner, as the config project @NAME@ (trusted, from main only); and
-# from the GitHub connection as AID's own project @OWNER@/@NAME@ (untrusted, and tested speculatively).
+# The test bed's tenant (../README.md, "The test bed"): the layout ThunderBox's tenant takes, read from the test bed's
+# two repositories, which run.sh puts in: @CONFIG_REPOSITORY@, a copy of kristofk/aid-zuul-config, as the config
+# project (trusted, from main only), and @REPOSITORY@, a copy of AIDepartment's ci/zuul/, as AID's own project
+# (untrusted, and tested speculatively).
 - tenant:
     name: aid
     source:
-      aid-config:
-        config-projects:
-          - @NAME@:
-              load-branch: main
-              extra-config-paths:
-                - ci/zuul/config/zuul.d/
-                # The test bed's build node.
-                - ci/zuul/testbed/zuul.d/
       github:
+        config-projects:
+          - @CONFIG_REPOSITORY@:
+              load-branch: main
+              # The test bed's build node, which sync.sh adds to the copy.
+              extra-config-paths:
+                - testbed/
         untrusted-projects:
-          - @OWNER@/@NAME@:
+          - @REPOSITORY@:
               extra-config-paths:
                 - ci/zuul/zuul.d/
       opendev.org:

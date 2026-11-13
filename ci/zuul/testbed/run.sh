@@ -4,7 +4,7 @@
 # (workflow.yml), in a copy that sync.sh made, on a machine with Docker and passwordless sudo:
 #   GITHUB_TOKEN=... TESTBED_REPOSITORY=owner/name ci/zuul/testbed/run.sh
 # GITHUB_TOKEN must be able to push branches, open and close pull requests and set commit statuses in the test bed's
-# repository, which must be public: the config project is read from it without a token.
+# repository. The config project's copy, which testbed.env names, must be public: Zuul reads it with that token.
 # Needs docker (with compose), jq, openssl, ssh-keygen and python3.
 set -euo pipefail
 
@@ -61,11 +61,13 @@ chmod 644 "$work/ssh/id_rsa.pub"
 
 echo "== configuration"
 # The deployment's zuul.conf, plus the test bed's connections; the deployment's tenant file is replaced by the test
-# bed's, with the repository put in.
-[[ "$TESTBED_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "TESTBED_REPOSITORY is not owner/name" >&2; exit 2; }
-owner=${TESTBED_REPOSITORY%/*} name=${TESTBED_REPOSITORY#*/}
-cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" | sed "s#@OWNER@#$owner#g" > "$work/etc/zuul.conf"
-sed -e "s#@OWNER@#$owner#g" -e "s#@NAME@#$name#g" "$here/main.yaml" > "$work/etc/main.yaml"
+# bed's, with the two repositories put in.
+config=$(sed -n 's/^TESTBED_CONFIG_REPOSITORY=//p' "$here/testbed.env")
+for repository in "$TESTBED_REPOSITORY" "$config"; do
+  [[ "$repository" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "'$repository' is not owner/name" >&2; exit 2; }
+done
+cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" > "$work/etc/zuul.conf"
+sed -e "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" -e "s#@CONFIG_REPOSITORY@#$config#g" "$here/main.yaml" > "$work/etc/main.yaml"
 chmod -R a+rX "$work/etc"
 
 echo "== patch"
@@ -88,4 +90,4 @@ echo "== start"
 
 echo "== scenario"
 python3 -I -B "$here/scenario.py" --zuul http://127.0.0.1:9000 --tenant aid --repository "$TESTBED_REPOSITORY" \
-  --checkout "$root"
+  --config-repository "$config" --checkout "$root"

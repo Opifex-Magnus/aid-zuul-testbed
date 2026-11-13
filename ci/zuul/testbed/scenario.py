@@ -1,14 +1,14 @@
 """The test bed's checks (../README.md, "The test bed"), against a running Zuul that run.sh started.
 
-Each check is an ordinary pull request in the test bed's repository, made the way an agent makes one: a branch, a
-commit and a pull request. The test bed then sends Zuul the event GitHub would send (Zuul has no route from GitHub
-here), and reads the result from Zuul's API and from the commit status Zuul sets on the pull request.
+Each check is an ordinary pull request in the test bed's copy of AIDepartment, made the way an agent makes one: a
+branch, a commit and a pull request. The test bed then sends Zuul the event GitHub would send (Zuul has no route from
+GitHub here), and reads the result from Zuul's API and from the commit status Zuul sets on the pull request.
 
-  1. The layout loads: the config project and AID's project, with no configuration error.
+  1. The layout loads: the copy of kristofk/aid-zuul-config as the config project, and AID's project, with no
+     configuration error.
   2. A pull request that adds a job runs that job on itself, before it exists on main.
-  3. A pull request that changes the trusted base job does not run with the change.
+  3. A pull request that defines a base job in AID's project is refused, with a configuration error.
   4. A pull request that defines a pipeline in AID's project is refused, with a configuration error.
-  5. A change to the config project on main takes effect without a restart.
 
 Standard library only. Reads GITHUB_TOKEN and ZUUL_WEBHOOK_TOKEN from the environment.
 """
@@ -235,9 +235,9 @@ def layout_loads(bed):
     expect(errors == [], f"the tenant has no configuration error {[error.get('error', '')[:300] for error in errors]}")
     _, projects = bed.zuul.get("/projects")
     found = {(project["canonical_name"], project["type"]) for project in projects}
-    name = bed.args.repository.split("/")[1]
-    expect((f"aid-config/{name}", "config") in found, f"the repository is the config project, as aid-config/{name}")
-    expect((f"github.com/{bed.args.repository}", "untrusted") in found, "the repository is AID's untrusted project, from GitHub")
+    expect((f"github.com/{bed.args.config_repository}", "config") in found,
+           f"{bed.args.config_repository} is the config project")
+    expect((f"github.com/{bed.args.repository}", "untrusted") in found, f"{bed.args.repository} is AID's untrusted project")
     _, jobs = bed.zuul.get("/jobs")
     expect({"base", "aid-bazel", "aid-script", "aid-seam-lint"} <= {job["name"] for job in jobs},
            "the base job and AID's job library are loaded")
@@ -283,24 +283,23 @@ def new_job_runs_speculatively(bed):
     expect(not bed.job_on_main("aid-testbed-hello"), "main still has no job aid-testbed-hello: it ran speculatively")
 
 
-def trusted_change_is_not_speculative(bed):
-    log("3. A pull request that changes the trusted base job runs without the change")
-    path = os.path.join(bed.args.checkout, "ci/zuul/config/playbooks/base/pre.yaml")
-    with open(path) as handle:
-        playbook = handle.read()
-    broken = playbook + """\
-- hosts: all
-  tasks:
-    - name: The pull request's own base job, which must never run before it merges
-      ansible.builtin.fail:
-        msg: the base job ran with a pull request's change
+BASE_JOB = """\
+- job:
+    name: testbed-base
+    parent: null
+    description: A base job of AID's own, which would replace the config project's checkout.
 """
-    pull = bed.open_pull_request("trusted-change", {"ci/zuul/config/playbooks/base/pre.yaml": broken},
-                                 "A change to the trusted base job")
-    buildset, builds = bed.check_result(pull)
-    expect(builds.get("aid-seam-lint") == "SUCCESS", "the job ran with main's base job, not the pull request's")
-    expect(buildset["result"] == "SUCCESS", "check passed")
-    expect(bed.commit_status(pull) == "success", "Zuul reported success on the pull request")
+
+
+def untrusted_base_job_is_refused(bed):
+    log("3. A pull request that defines a base job in AID's project is refused")
+    pull = bed.open_pull_request("untrusted-base-job", {"ci/zuul/zuul.d/testbed-base.yaml": BASE_JOB},
+                                 "A base job in AID's untrusted project")
+    expect(bed.commit_status(pull, timeout=600) == "failure", "Zuul reported failure on the pull request")
+    comments = wait(f"Zuul's comment on #{pull['number']}", lambda: bed.comments(pull), 120)
+    # Zuul's own words for it (zuul/exceptions.py, BaseJobNotPermittedError).
+    expect(any("Base jobs may only be defined in config projects" in " ".join(body.split()) for body in comments),
+           f"its comment says why: {comments[-1][:300]!r}")
 
 
 PIPELINE = """\
@@ -326,52 +325,25 @@ def untrusted_pipeline_is_refused(bed):
            f"its comment says why: {comments[-1][:300]!r}")
 
 
-MERGED_PIPELINE = """\
-# Added on main by the test bed, to see a change to the config project take effect once it is merged.
-- pipeline:
-    name: testbed-merged
-    manager: independent
-    trigger:
-      github:
-        - event: pull_request
-          action: comment
-          comment: ^never$
-"""
-
-
-def trusted_change_takes_effect_after_merge(bed):
-    log("5. A change to the config project on main takes effect")
-    bed.commit({"ci/zuul/config/zuul.d/testbed-merged.yaml": MERGED_PIPELINE}, "The test bed: a new trusted pipeline")
-    bed.git("push", "--quiet", "origin", "HEAD:refs/heads/main")
-
-    def listed():
-        _, pipelines = bed.zuul.get("/pipelines")
-        return "testbed-merged" in {pipeline["name"] for pipeline in pipelines}
-
-    wait("the merged pipeline", listed, 300)
-    expect(True, "Zuul loaded the config project's new pipeline from main, by polling")
-    bed.commit({"ci/zuul/config/zuul.d/testbed-merged.yaml": None}, "The test bed: the trusted pipeline removed")
-    bed.git("push", "--quiet", "origin", "HEAD:refs/heads/main")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--zuul", required=True, help="zuul-web's URL")
     parser.add_argument("--tenant", required=True)
-    parser.add_argument("--repository", required=True, help="the test bed's repository, owner/name")
+    parser.add_argument("--repository", required=True, help="the test bed's copy of AIDepartment, owner/name")
+    parser.add_argument("--config-repository", required=True, help="its copy of kristofk/aid-zuul-config, owner/name")
     parser.add_argument("--checkout", required=True, help="a checkout of it, that can push")
     args = parser.parse_args()
     bed = Testbed(args)
     try:
-        for check in (layout_loads, new_job_runs_speculatively, trusted_change_is_not_speculative,
-                      untrusted_pipeline_is_refused, trusted_change_takes_effect_after_merge):
+        for check in (layout_loads, new_job_runs_speculatively, untrusted_base_job_is_refused,
+                      untrusted_pipeline_is_refused):
             check(bed)
     except Failure as error:
         log(f"FAILED: {error}")
         return 1
     finally:
         bed.cleanup()
-    log("All five checks passed.")
+    log("All four checks passed.")
     return 0
 
 

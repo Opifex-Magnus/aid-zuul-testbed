@@ -3,7 +3,7 @@
 # (ci/zuul/README.md, "Adding or changing a job").
 #
 # The library: two abstract jobs, one for a Bazel command and one for a script from the repository. Every job of AID's
-# is one of them with its variables set. Each inherits `base` (ci/zuul/config/zuul.d/jobs.yaml), which checks the
+# is one of them with its variables set. Each inherits `base` (kristofk/aid-zuul-config), which checks the
 # code out; neither holds build logic, which stays in Bazel and in the scripts.
 
 - job:
