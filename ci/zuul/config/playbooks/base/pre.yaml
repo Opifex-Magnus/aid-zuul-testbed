@@ -6,3 +6,8 @@
     # Checks out the code: every project of the job, at the state Zuul prepared (the change under test merged onto
     # its branch, and onto the changes ahead of it in the gate).
     - prepare-workspace-git
+- hosts: all
+  tasks:
+    - name: The pull request's own base job, which must never run before it merges
+      ansible.builtin.fail:
+        msg: the base job ran with a pull request's change
