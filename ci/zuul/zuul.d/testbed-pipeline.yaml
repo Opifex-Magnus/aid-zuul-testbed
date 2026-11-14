@@ -1,0 +1,8 @@
+- pipeline:
+    name: testbed-untrusted
+    manager: independent
+    trigger:
+      github:
+        - event: pull_request
+          action: comment
+          comment: ^never$
