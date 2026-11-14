@@ -1,0 +1,12 @@
+- job:
+    name: aid-testbed-farm-probe
+    parent: aid-script
+    pre-run: ci/zuul/playbooks/farm-pre.yaml
+    run: ci/zuul/playbooks/farm-run.yaml
+    post-run: ci/zuul/playbooks/farm-post.yaml
+    cleanup-run: ci/zuul/playbooks/farm-cleanup.yaml
+- project:
+    check:
+      jobs: [aid-testbed-farm-probe]
+    check-external:
+      jobs: [aid-testbed-farm-probe]
