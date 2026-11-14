@@ -1,0 +1,13 @@
+# Added by the test bed's pull request: a job of AID's, from the library, and the check pipeline running it.
+- job:
+    name: aid-testbed-hello
+    parent: aid-bazel
+    description: Builds the test bed's one target.
+    vars:
+      bazel_command: build
+      bazel_targets: ["//testbed/hello:hello"]
+
+- project:
+    check:
+      jobs:
+        - aid-testbed-hello
