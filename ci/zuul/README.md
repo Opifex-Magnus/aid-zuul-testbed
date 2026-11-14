@@ -103,7 +103,9 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
 
 Zuul has no route from GitHub there, so the test bed sends Zuul the `pull_request` event GitHub would, signed with the
 connection's webhook token. The build node is a container with Bazelisk, a stand-in for #1345's; its provider,
-[`testbed/providers.yaml`](testbed/providers.yaml), goes only into the test bed's copy of aid-zuul-config.
+[`testbed/providers.yaml`](testbed/providers.yaml), goes only into the test bed's copy of aid-zuul-config. It replaces
+the production `zuul.d/providers.yaml` there: Compose cannot reach the k3s pod. Pipelines, jobs and playbooks are
+copied unchanged; the production provider needs a separate live test on k3s.
 
 One thing differs from ThunderBox's Zuul: the token. For every pull request, Zuul's GitHub driver asks for the
 repository's branch protection rules, which need the repository's **administration** permission. A workflow's token

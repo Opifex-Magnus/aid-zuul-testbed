@@ -8,7 +8,7 @@
       github:
         config-projects:
           - @CONFIG_REPOSITORY@:
-              load-branch: main
+              load-branch: opifex-issue-1345
               # Its own check, which needs to know how GitHub may merge into it: the run's token, which cannot push
               # there, is told no way at all, and Zuul refuses the stanza ("Merge mode merge not supported").
               exclude:

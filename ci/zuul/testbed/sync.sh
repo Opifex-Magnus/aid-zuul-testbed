@@ -24,6 +24,9 @@ config_repository=$(git -C "$config_dest" remote get-url origin | sed -E 's#^(ht
 
 find "$dest" "$config_dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 (cd "$config" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} "$config_dest/" \;)
+# Compose's node replaces the production k3s provider for the same aid-node label. Keep the
+# production pipelines, base job and playbooks; its real provider is tested on k3s, not Compose.
+rm -f "$config_dest/zuul.d/providers.yaml"
 mkdir -p "$config_dest/testbed"
 cp "$here/providers.yaml" "$config_dest/testbed/"
 mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/scripts" "$dest/.github/workflows"
