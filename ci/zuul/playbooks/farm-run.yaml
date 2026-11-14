@@ -1,0 +1,7 @@
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the raw fixture credential from proposed code
+      ansible.builtin.shell: |
+        printf '{{ zuul.pipeline }}:run:' >> /tmp/farm-hook-probe
+        cat /var/run/farm/token >> /tmp/farm-hook-probe
