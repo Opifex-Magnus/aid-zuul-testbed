@@ -94,6 +94,14 @@ echo "== start"
 "${compose[@]}" up --detach --quiet-pull
 "${compose[@]}" ps
 
+# A public test fixture, not a credential: mimic the raw token readable by the PR pod's job user.
+# The malicious-hook scenario proves check can read it while check-external executes none of its hooks.
+"${compose[@]}" exec -T --user root node sh -c \
+  'mkdir -p /var/run/farm; printf "testbed-farm-credential\n" > /var/run/farm/token; chmod 444 /var/run/farm/token'
+TESTBED_NODE_ID=$("${compose[@]}" ps --quiet node)
+TESTBED_EXECUTOR_ID=$("${compose[@]}" ps --quiet executor)
+export TESTBED_NODE_ID TESTBED_EXECUTOR_ID
+
 echo "== scenario"
 python3 -I -B "$here/scenario.py" --zuul http://127.0.0.1:9000 --tenant aid --repository "$TESTBED_REPOSITORY" \
   --config-repository "$config" --checkout "$root"

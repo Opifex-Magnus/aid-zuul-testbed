@@ -9,6 +9,8 @@ GitHub here), and reads the result from Zuul's API and from the commit status Zu
   2. A pull request that adds a job runs that job on itself, before it exists on main.
   3. A pull request that defines a base job in AID's project is refused, with a configuration error.
   4. A pull request that defines a pipeline in AID's project is refused, with a configuration error.
+  5. A proposed job can read the fixture farm token in every phase of check, but none of its
+     pre/run/post/cleanup hooks execute in check-external: the trusted base rejects it first.
 
 Standard library only. Reads GITHUB_TOKEN and ZUUL_WEBHOOK_TOKEN from the environment.
 """
@@ -166,25 +168,26 @@ class Testbed:
                                         "repository": repository, "sender": {"login": pull["user"]["login"]}})
         return pull
 
-    def check_result(self, pull, timeout=1200):
+    def check_result(self, pull, timeout=1200, pipeline="check"):
         """Waits for the check pipeline's result on the pull request's head; returns the buildset and its builds."""
         number, sha = pull["number"], pull["head"]["sha"]
         query = urllib.parse.urlencode({"project": self.args.repository, "change": number, "patchset": sha,
-                                        "pipeline": "check", "complete": "true"})
+                                        "pipeline": pipeline, "complete": "true"})
 
         def done():
             _, buildsets = self.zuul.get(f"/buildsets?{query}")
             return buildsets[0] if buildsets else None
 
-        buildset = wait(f"check's result on #{number}", done, timeout)
+        buildset = wait(f"{pipeline}'s result on #{number}", done, timeout)
         _, builds = self.zuul.get(f"/builds?{query}")
+        self.last_builds = builds
         results = {build["job_name"]: build["result"] for build in builds}
-        log(f"  #{number}: check {buildset['result']}, builds {results}")
+        log(f"  #{number}: {pipeline} {buildset['result']}, builds {results}")
         return buildset, results
 
-    def commit_status(self, pull, timeout=120):
+    def commit_status(self, pull, timeout=120, pipeline="check"):
         """The state of the commit status Zuul's check pipeline set on the pull request's head (tenant/pipeline)."""
-        context = f"{self.args.tenant}/check"
+        context = f"{self.args.tenant}/{pipeline}"
 
         def final():
             statuses = self.github.repo(f"/commits/{pull['head']['sha']}/statuses")
@@ -194,6 +197,12 @@ class Testbed:
         status = wait(f"Zuul's {context} status on #{pull['number']}", final, timeout)
         log(f"  #{pull['number']}: GitHub shows {context} {status['state']}: {status['description']}")
         return status["state"]
+
+    def external_comment(self, pull):
+        comment = self.github.repo(f"/issues/{pull['number']}/comments", method="POST", body={"body": "check-external"})
+        issue = self.github.repo(f"/issues/{pull['number']}")
+        self.zuul.send("issue_comment", {"action": "created", "issue": issue, "comment": comment,
+                                       "repository": self.github.repo(), "sender": comment["user"]})
 
     def comments(self, pull):
         return [comment["body"] for comment in self.github.repo(f"/issues/{pull['number']}/comments")]
@@ -224,7 +233,7 @@ def expect(condition, message):
 
 def layout_loads(bed):
     log("1. The layout loads")
-    names = {"check", "gate"}
+    names = {"check", "check-external", "gate"}
 
     def loaded():
         _, pipelines = bed.zuul.get("/pipelines", ok=(200, 404))
@@ -325,6 +334,62 @@ def untrusted_pipeline_is_refused(bed):
            f"its comment says why: {comments[-1][:300]!r}")
 
 
+def container_text(container, path):
+    result = subprocess.run(["docker", "exec", os.environ[container], "cat", path],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise Failure(f"cannot read test fixture {path}: {result.stderr[:200]}")
+    return result.stdout
+
+
+def external_job_cannot_read_farm(bed):
+    log("5. check-external is rejected before every untrusted hook, including post and cleanup")
+    job = "aid-testbed-farm-probe"
+    files = {"ci/zuul/zuul.d/testbed-farm.yaml": f"""\
+- job:
+    name: {job}
+    parent: aid-script
+    pre-run: ci/zuul/playbooks/farm-pre.yaml
+    run: ci/zuul/playbooks/farm-run.yaml
+    post-run: ci/zuul/playbooks/farm-post.yaml
+    cleanup-run: ci/zuul/playbooks/farm-cleanup.yaml
+- project:
+    check:
+      jobs: [{job}]
+    check-external:
+      jobs: [{job}]
+"""}
+    for phase in ("pre", "run", "post", "cleanup"):
+        files[f"ci/zuul/playbooks/farm-{phase}.yaml"] = """\
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the raw fixture credential from proposed code
+      ansible.builtin.shell: |
+        printf '{{ zuul.pipeline }}:PHASE:' >> /tmp/farm-hook-probe
+        cat /var/run/farm/token >> /tmp/farm-hook-probe
+""".replace("PHASE", phase)
+    pull = bed.open_pull_request("external-farm-probe", files, "Probe the external-job farm boundary in every hook")
+    _, builds = bed.check_result(pull)
+    expect(builds.get(job) == "SUCCESS", "the proposed probe actually executes in check")
+    before = container_text("TESTBED_NODE_ID", "/tmp/farm-hook-probe")
+    expected = {f"check:{phase}:testbed-farm-credential" for phase in ("pre", "run", "post", "cleanup")}
+    expect(set(before.splitlines()) == expected and len(before.splitlines()) == 4,
+           "all four untrusted hooks can read the raw token fixture in check")
+    bed.external_comment(pull)
+    buildset, builds = bed.check_result(pull, pipeline="check-external")
+    expect(builds.get(job) == "FAILURE" and buildset["result"] == "FAILURE",
+           "the external probe fails without retries")
+    build = next(build for build in bed.last_builds if build["job_name"] == job)
+    build_uuid = uuid.UUID(build["uuid"]).hex
+    output = container_text("TESTBED_EXECUTOR_ID", f"/var/lib/zuul/builds/{build_uuid}/work/logs/job-output.txt")
+    expect("check-external is blocked until a credential-free node is available" in output,
+           "the failure is the trusted pipeline guard, not a broken job or node")
+    expect(container_text("TESTBED_NODE_ID", "/tmp/farm-hook-probe") == before,
+           "no external pre/run/post/cleanup hook executed or read the token")
+    expect(bed.commit_status(pull, pipeline="check-external") == "failure", "the external failure is reported")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--zuul", required=True, help="zuul-web's URL")
@@ -336,14 +401,14 @@ def main():
     bed = Testbed(args)
     try:
         for check in (layout_loads, new_job_runs_speculatively, untrusted_base_job_is_refused,
-                      untrusted_pipeline_is_refused):
+                      untrusted_pipeline_is_refused, external_job_cannot_read_farm):
             check(bed)
     except Failure as error:
         log(f"FAILED: {error}")
         return 1
     finally:
         bed.cleanup()
-    log("All four checks passed.")
+    log("All five checks passed.")
     return 0
 
 

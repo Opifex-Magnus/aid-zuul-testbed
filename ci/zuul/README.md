@@ -31,7 +31,8 @@ decides what every job may do and see.
 - **AID's project is untrusted.** Its jobs, playbooks and roles are tested *speculatively*: a pull request that adds
   or changes a job runs that job, as changed, on itself, merged onto `main` and onto the pull requests ahead of it in
   the gate. What it may not do, Zuul refuses with a configuration error on the pull request: a pipeline, or a base job
-  (the test bed checks both).
+  (the test bed checks both). The trusted base currently rejects `check-external` before untrusted code starts,
+  until separate credential-free nodes exist; the PR node's raw farm token is readable by its job user.
 
 AID's configuration is in `ci/zuul/zuul.d/`, which the tenant names (`extra-config-paths`), so that all of CI stays
 under `ci/`. Zuul would also read a `zuul.yaml`, `zuul.d/`, `.zuul.yaml` or `.zuul.d/` at the repository's root, so
@@ -99,7 +100,10 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
 3. a pull request that defines a base job in AID's project fails, with Zuul's "Base jobs may only be defined in
    config projects" on the pull request;
 4. a pull request that defines a pipeline in AID's project fails, with Zuul's "Pipelines may not be defined in
-   untrusted repos" on the pull request.
+   untrusted repos" on the pull request;
+5. a proposed job reads a fake raw farm token in every pre/run/post/cleanup hook under `check`, then fails at the
+   trusted base guard under `check-external`. The node's probe file remains unchanged, and the executor log must
+   identify the guard failure. No external hook executes, including post and cleanup after the failed pre-run.
 
 Zuul has no route from GitHub there, so the test bed sends Zuul the `pull_request` event GitHub would, signed with the
 connection's webhook token. The build node is a container with Bazelisk, a stand-in for #1345's; its provider,

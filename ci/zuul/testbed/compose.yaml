@@ -79,7 +79,8 @@ services:
   executor:
     <<: *zuul
     image: ${ZUUL_EXECUTOR_IMAGE:?}
-    command: ["zuul-executor", "-f"]
+    # Keep job logs for the scenario's assertion that the trusted guard caused the external failure.
+    command: ["zuul-executor", "-f", "--keep-jobdir"]
     # Bubblewrap, as on ThunderBox (deploy/zuul/README.md, "The executor").
     privileged: true
     environment:
