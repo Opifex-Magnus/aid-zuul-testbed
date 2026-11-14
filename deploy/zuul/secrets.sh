@@ -11,6 +11,11 @@
 #   deploy/zuul/secrets.sh executor --ca-cert FILE --ca-key FILE --keystore-password FILE
 #       for the namespace zuul-executor: zuul-zookeeper-client (the executor's own client key pair)
 #       and zuul-keystore.
+#   deploy/zuul/secrets.sh github --app-id ID --app-key FILE --webhook-token FILE
+#       for both namespaces, the same: zuul-github, the GitHub App's ID, its private key (the PEM GitHub made) and
+#       the webhook secret set in the App's settings (github.md, "The GitHub App"). Renewing the key is the same
+#       command with the new one, then a restart of every Zuul pod; GitHub keeps both keys valid until the old one is
+#       deleted in the App's settings.
 #   deploy/zuul/secrets.sh db
 #       for the namespace zuul: zuul-db, new random passwords for the database's users zuul and
 #       root. Only before the database's first start: MariaDB sets them once, into an empty
@@ -29,6 +34,9 @@ days=""
 ca_cert=""
 ca_key=""
 keystore=""
+app_id=""
+app_key=""
+webhook_token=""
 args=()
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
@@ -38,6 +46,9 @@ while [ $# -gt 0 ]; do
     --ca-cert) ca_cert=${2:?--ca-cert needs a value}; shift 2 ;;
     --ca-key) ca_key=${2:?--ca-key needs a value}; shift 2 ;;
     --keystore-password) keystore=${2:?--keystore-password needs a value}; shift 2 ;;
+    --app-id) app_id=${2:?--app-id needs a value}; shift 2 ;;
+    --app-key) app_key=${2:?--app-key needs a value}; shift 2 ;;
+    --webhook-token) webhook_token=${2:?--webhook-token needs a value}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     *) args+=("$1"); shift ;;
@@ -161,6 +172,28 @@ case "$command" in
     read_ca
     read_keystore
     client_secrets zuul-executor | jq -s '{apiVersion: "v1", kind: "List", items: .}'
+    ;;
+
+  github)
+    [ "${#args[@]}" -eq 0 ] || { usage >&2; exit 2; }
+    [ -n "$app_id" ] && [ -n "$app_key" ] && [ -n "$webhook_token" ] \
+      || { echo "github needs --app-id, --app-key and --webhook-token" >&2; exit 2; }
+    [[ "$app_id" =~ ^[1-9][0-9]{0,11}$ ]] || { echo "--app-id must be the App's number, as its settings page shows it" >&2; exit 2; }
+    printf '%s' "$app_id" > "$tmp/app-id"
+    # Each file is read once: it may be a pipe.
+    (umask 077 && cat "$app_key" > "$tmp/app-key.pem")
+    if ! openssl pkey -in "$tmp/app-key.pem" -noout 2> /dev/null \
+       || ! grep -q -- '-----BEGIN RSA PRIVATE KEY-----\|-----BEGIN PRIVATE KEY-----' "$tmp/app-key.pem"; then
+      echo "--app-key is not a private key in PEM, as GitHub makes it" >&2; exit 1
+    fi
+    openssl rsa -in "$tmp/app-key.pem" -check -noout > /dev/null 2>&1 \
+      || { echo "--app-key is not an RSA key: GitHub's App keys are RSA" >&2; exit 1; }
+    (umask 077 && tr -d '\n' < "$webhook_token" > "$tmp/webhook-token")
+    [ "$(wc -c < "$tmp/webhook-token")" -ge 32 ] || { echo "the webhook secret is shorter than 32 characters" >&2; exit 1; }
+    # zuul.conf takes it through configparser, for which % starts an interpolation; GitHub takes no line break.
+    ! grep -q '[%[:space:]]' "$tmp/webhook-token" || { echo "the webhook secret must not contain % or a space" >&2; exit 1; }
+    secret zuul-github Opaque "app-id=$tmp/app-id" "app-key.pem=$tmp/app-key.pem" "webhook-token=$tmp/webhook-token"
+    echo "zuul-github: App $app_id, key $(openssl pkey -in "$tmp/app-key.pem" -pubout 2> /dev/null | openssl sha256 -r | cut -c1-16)…" >&2
     ;;
 
   db)

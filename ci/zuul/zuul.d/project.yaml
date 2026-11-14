@@ -5,6 +5,11 @@
     check:
       jobs:
         - aid-seam-lint
+    # Anyone's pull request, on a maintainer's comment (deploy/zuul/github.md, "Who makes Zuul run what"): the same
+    # jobs as check, which get no secret and no farm there.
+    check-external:
+      jobs:
+        - aid-seam-lint
     gate:
       jobs:
         - aid-seam-lint

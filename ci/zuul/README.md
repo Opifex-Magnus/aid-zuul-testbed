@@ -104,8 +104,8 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
 Zuul has no route from GitHub there, so the test bed sends Zuul the `pull_request` event GitHub would, signed with the
 connection's webhook token. The build node is a container with Bazelisk, a stand-in for #1345's; its provider,
 [`testbed/providers.yaml`](testbed/providers.yaml), goes only into the test bed's copy of aid-zuul-config. It replaces
-the production `zuul.d/providers.yaml` there: Compose cannot reach the k3s pod. Pipelines, jobs and playbooks are
-copied unchanged; the production provider needs a separate live test on k3s.
+the production `zuul.d/providers.yaml` there: Compose cannot reach the k3s pod. Jobs and playbooks are copied unchanged;
+the pipeline adaptations for the workflow's token are below. The production provider needs a separate live test on k3s.
 
 One thing differs from ThunderBox's Zuul: the token. For every pull request, Zuul's GitHub driver asks for the
 repository's branch protection rules, which need the repository's **administration** permission. A workflow's token
@@ -147,9 +147,10 @@ A failed run prints every service's log.
 
 ## On ThunderBox
 
-ThunderBox's tenant ([`deploy/zuul/server/config/main.yaml`](../../deploy/zuul/server/config/main.yaml)) holds only
-Zuul's job library until #1344 connects GitHub, and installs Zuul's GitHub App on both repositories. Then it takes this
-layout, as the test bed's tenant ([`testbed/main.yaml`](testbed/main.yaml)) does, without the test bed's build node:
+ThunderBox's tenant ([`deploy/zuul/server/config/main.yaml`](../../deploy/zuul/server/config/main.yaml)) takes this
+layout since #1344, which connects GitHub through Zuul's GitHub App on both repositories
+([`deploy/zuul/github.md`](../../deploy/zuul/github.md)). It is the test bed's tenant ([`testbed/main.yaml`](testbed/main.yaml))
+without the test bed's build node:
 
 ```yaml
 - tenant:

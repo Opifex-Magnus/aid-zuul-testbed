@@ -66,7 +66,13 @@ config=$(sed -n 's/^TESTBED_CONFIG_REPOSITORY=//p' "$here/testbed.env")
 for repository in "$TESTBED_REPOSITORY" "$config"; do
   [[ "$repository" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "'$repository' is not owner/name" >&2; exit 2; }
 done
-cat "$root/deploy/zuul/server/config/zuul.conf" "$here/zuul.conf" > "$work/etc/zuul.conf"
+# The deployment's own connection github is ThunderBox's App (deploy/zuul/github.md), which the test bed does not have:
+# it is left out, and the test bed's, with the run's token, takes its place.
+awk '/^\[connection "github"\]$/ { skip = 1; next } /^\[/ { skip = 0 } !skip' "$root/deploy/zuul/server/config/zuul.conf" \
+  > "$work/etc/deployment.conf"
+[ "$(grep -c '^\[connection "github"\]$' "$work/etc/deployment.conf")" -eq 0 ] || { echo "the deployment's connection github is still there" >&2; exit 1; }
+cat "$work/etc/deployment.conf" "$here/zuul.conf" > "$work/etc/zuul.conf"
+rm "$work/etc/deployment.conf"
 sed -e "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" -e "s#@CONFIG_REPOSITORY@#$config#g" "$here/main.yaml" > "$work/etc/main.yaml"
 chmod -R a+rX "$work/etc"
 
