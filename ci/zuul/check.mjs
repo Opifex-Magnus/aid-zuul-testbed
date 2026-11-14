@@ -2,7 +2,7 @@
 //   (cd ci/zuul && node check.mjs)
 // It reads the YAML as text, in the forms these files use (one job's `run:` a path, a playbook's roles a list of
 // names), and reports anything in another form rather than guess. ../zuul.test.mjs runs it in CI's Node tests.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,6 +40,8 @@ const attribute = (item, key) => {
   }
   return undefined;
 };
+// A job's variable, under its `vars:` (six spaces in).
+const variable = (item, key) => attribute(item, `  ${key}`);
 
 // The roles a playbook names, in the form `roles:` then `- name` (or `- role: name`) below it.
 export function playbookRoles(text) {
@@ -69,6 +71,28 @@ export function taskKeys(text) {
     if (key && tasks.length) tasks.at(-1).push(key[1]);
   }
   return tasks;
+}
+
+// What a project stanza says: its own scalar attributes (`merge-mode: rebase`), and the jobs each pipeline runs, in the
+// form `<pipeline>:` then `jobs:` then `- <job>` below it. A job given with its own attributes is reported as null.
+export function projectStanza(item) {
+  const attributes = {}, pipelines = {};
+  let pipeline = null, inJobs = false;
+  for (const line of item.lines) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const top = line.match(/^    ([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (top) {
+      inJobs = false;
+      if (top[2] === "") { pipeline = top[1]; pipelines[pipeline] = []; } else { pipeline = null; attributes[top[1]] = top[2].trim(); }
+      continue;
+    }
+    if (pipeline && /^      jobs:\s*$/.test(line)) { inJobs = true; continue; }
+    const job = line.match(/^        - ([A-Za-z0-9_-]+)\s*$/);
+    if (pipeline && inJobs && job) pipelines[pipeline].push(job[1]);
+    else if (pipeline && inJobs && /^        /.test(line)) pipelines[pipeline].push(null);
+    else inJobs = false;
+  }
+  return { attributes, pipelines };
 }
 
 // The extra-config-paths a tenant file gives each source's projects: { source: { "config"|"untrusted": [path] } }.
@@ -105,7 +129,8 @@ export function check(root) {
     if (existsSync(at(name))) problems.push(`${name} at the repository's root: AID's jobs are in ${UNTRUSTED}, and Zuul would read both`);
   }
 
-  // The test bed's tenant reads AID's project from its folder, and the config project's copy only for its build node.
+  // The test bed's tenant reads AID's project from its folder, and the config project's copy only for testbed/: its
+  // build node and its jobs with a secret.
   const tenant = tenantPaths(read("ci/zuul/testbed/main.yaml"));
   const configPaths = Object.values(tenant).flatMap((source) => source.config);
   const untrustedPaths = Object.values(tenant).flatMap((source) => source.untrusted);
@@ -114,19 +139,21 @@ export function check(root) {
     if (path !== "testbed/") problems.push(`the test bed's config project reads ${path}: its copy adds only testbed/`);
   }
 
-  // AID's jobs and their playbooks.
+  // AID's jobs and their playbooks, and the project stanzas that say which pipeline runs them.
   const jobs = {};
+  const projects = [];
   for (const file of yamlFiles(at(UNTRUSTED))) {
     const where = posix.join(UNTRUSTED, file.slice(at(UNTRUSTED).length + 1));
     for (const item of items(readFileSync(file, "utf8"))) {
       if (item.kind === null) { problems.push(`${where}: a top-level line outside a "- kind:" item: ${item.lines[0]}`); continue; }
       if (item.kind === "pipeline") problems.push(`${where}: a pipeline in AID's untrusted project; pipelines are kristofk/aid-zuul-config's`);
+      if (item.kind === "project") projects.push({ where, ...projectStanza(item) });
       if (item.kind !== "job") continue;
       const name = attribute(item, "name");
       if (!name) { problems.push(`${where}: a job with no name`); continue; }
       const parent = attribute(item, "parent");
       if (parent === "null") problems.push(`${where}: ${name} is a base job (parent: null); the base job is kristofk/aid-zuul-config's`);
-      jobs[name] = { where, parent, abstract: attribute(item, "abstract") === "true" };
+      jobs[name] = { where, parent, abstract: attribute(item, "abstract") === "true", script: variable(item, "script") };
       for (const key of ["pre-run", "run", "post-run", "cleanup-run"]) {
         const path = attribute(item, key);
         if (path === undefined) continue;
@@ -150,6 +177,36 @@ export function check(root) {
       parent = jobs[parent].parent;
     }
     if (!LIBRARY.includes(parent)) problems.push(`${job.where}: ${name} inherits neither ${LIBRARY.join(" nor ")}`);
+  }
+
+  // Each script a job runs is in the repository, and can be run as aid-script runs it (`./<script>`).
+  for (const [name, job] of Object.entries(jobs)) {
+    if (job.script === undefined) continue;
+    if (!/^(ci|scripts)\/[^ ]+$/.test(job.script) || job.script.split("/").includes("..")) problems.push(`${job.where}: ${name}'s script ${job.script} is not under ci/ or scripts/`);
+    else if (!existsSync(at(job.script))) problems.push(`${job.where}: ${name}'s script ${job.script} does not exist`);
+    else if ((statSync(at(job.script)).mode & 0o111) === 0) problems.push(`${job.where}: ${name}'s script ${job.script} is not executable`);
+  }
+
+  // The project (gate.md): merged by rebase, check and check-external the same cheap jobs, gate the full ones, and
+  // every job it names one of AID's that runs (or Zuul's noop).
+  const project = projects.find((stanza) => Object.keys(stanza.pipelines).length);
+  if (projects.length !== 1 || !project) problems.push(`${UNTRUSTED}: ${projects.length} project stanzas; AID's project has one, which names its pipelines' jobs`);
+  else {
+    if (project.attributes["merge-mode"] !== "rebase") problems.push(`${project.where}: merge-mode is ${project.attributes["merge-mode"]}, not rebase: main stays linear (gate.md, "Merging")`);
+    for (const pipeline of ["check", "check-external", "gate"]) {
+      if (!project.pipelines[pipeline]?.length) problems.push(`${project.where}: no jobs in ${pipeline}`);
+    }
+    if (JSON.stringify(project.pipelines.check) !== JSON.stringify(project.pipelines["check-external"])) {
+      problems.push(`${project.where}: check-external runs ${project.pipelines["check-external"]}, check ${project.pipelines.check}: the same cheap jobs`);
+    }
+    for (const [pipeline, names] of Object.entries(project.pipelines)) {
+      for (const name of names) {
+        if (name === null) problems.push(`${project.where}: a job in ${pipeline} in a form check.mjs does not read`);
+        else if (name === "noop") continue;
+        else if (!jobs[name]) problems.push(`${project.where}: ${pipeline} runs ${name}, which is not one of AID's jobs`);
+        else if (jobs[name].abstract) problems.push(`${project.where}: ${pipeline} runs ${name}, which is abstract`);
+      }
+    }
   }
 
   // Every role a playbook names is beside it, and does only what a role may.

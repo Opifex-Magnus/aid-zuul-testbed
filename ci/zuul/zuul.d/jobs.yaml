@@ -27,7 +27,8 @@
     vars:
       script_args: []
 
-# AID's own jobs.
+# AID's own jobs. The cheap ones (check) are the plan job's script checks of CI's cheap layer; the full one (gate) is
+# its expensive layer's Bazel build and test. The rest of CI's steps come as jobs of the same two kinds (#1353).
 
 - job:
     name: aid-seam-lint
@@ -37,3 +38,40 @@
     vars:
       script: scripts/seam-lint.sh
       script_args: [--project, aid]
+
+- job:
+    name: aid-seam-lint-test
+    parent: aid-script
+    description: The seam check itself catches a sibling's name in any letter case.
+    timeout: 600
+    vars:
+      script: scripts/seam-lint-test.sh
+
+- job:
+    name: aid-apps-lint
+    parent: aid-script
+    description: Nothing in Packages/ or Sources/ names an application under apps/.
+    timeout: 600
+    vars:
+      script: scripts/apps-lint.sh
+
+- job:
+    name: aid-apps-lint-test
+    parent: aid-script
+    description: The apps check itself fails on a planted reference.
+    timeout: 600
+    vars:
+      script: scripts/apps-lint-test.sh
+
+- job:
+    name: aid-bazel-everything
+    parent: aid-bazel
+    description: |
+      Builds and tests everything with a BUILD file, as CI's `bazel` job does in the merge queue's run, within the
+      base job's 2-hour timeout (ci/zuul/gate.md, "Timeouts").
+    vars:
+      bazel_command: test
+      # On the build farm, from a node with no compiler (#1345): .bazelrc's `zuul`, the farm by the cluster's address,
+      # the hermetic toolchain and no local fallback, under `dev`; the gate's `main` comes with its own nodes (#1351).
+      bazel_flags: [--config=ci, --config=zuul]
+      bazel_targets: ["//..."]

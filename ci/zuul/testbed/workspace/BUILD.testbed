@@ -1,0 +1,9 @@
+# The test bed's stand-in for AIDepartment's tests (sync.sh puts it at testbed/gate/BUILD.bazel in the copy), which
+# aid-bazel-everything runs in gate. It reads every testbed/gate/*.txt of the state under test (gate_test.sh).
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "gate_test",
+    srcs = ["gate_test.sh"],
+    data = glob(["*.txt"], allow_empty = True),
+)

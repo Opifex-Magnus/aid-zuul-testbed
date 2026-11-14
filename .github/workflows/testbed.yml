@@ -1,7 +1,14 @@
 # The test bed's workflow (../README.md, "The test bed"). sync.sh copies it into the test bed's repository as
 # .github/workflows/testbed.yml; it runs only when dispatched: gh workflow run testbed.yml --repo <owner>/<name>
+# (with -f loop_pull=<n> for the two-agent loop's run, ../README.md, "The two-agent loop on the test bed").
 name: Zuul test bed
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      loop_pull:
+        description: The builder's pull request for the two-agent loop's check (13) alone; empty runs checks 1 to 12
+        required: false
+        default: ""
 permissions:
   contents: write
   pull-requests: write
@@ -25,3 +32,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TESTBED_REPOSITORY: ${{ github.repository }}
+          TESTBED_LOOP_PULL: ${{ inputs.loop_pull }}

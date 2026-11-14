@@ -22,6 +22,18 @@ x-zuul: &zuul
     - ${TESTBED_WORK:?}/graphql/canmerge.graphql:${ZUUL_GRAPHQL:?}/canmerge.graphql:ro
 
 services:
+  events:
+    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks: [zuul]
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-t", "health", "-m", "ready"]
+      interval: 1s
+      retries: 30
+    mem_limit: 64m
+    cpus: 0.25
+
   zookeeper:
     image: ${ZOOKEEPER_IMAGE:?}
     environment:
@@ -79,7 +91,9 @@ services:
   executor:
     <<: *zuul
     image: ${ZUUL_EXECUTOR_IMAGE:?}
-    command: ["zuul-executor", "-f"]
+    # Each build's work folder is kept: the scenario reads the trusted guard's failure from a build's log, and run.sh
+    # prints what a failed build's playbooks said (the test bed has no log storage).
+    command: ["zuul-executor", "-f", "--keep-jobdir"]
     # Bubblewrap, as on ThunderBox (deploy/zuul/README.md, "The executor").
     privileged: true
     environment:
@@ -95,12 +109,17 @@ services:
       - ${TESTBED_WORK:?}/ssh:/root/.ssh:ro
     networks: [zuul]
 
-  # The build node, a stand-in for #1345's: the static provider in zuul.d/providers.yaml names it.
-  node:
+  # The build nodes, stand-ins for #1345's: the static provider in providers.yaml names them. Two, so that gate's
+  # window of two runs two pull requests' jobs at once (ci/zuul/gate.md, "Speculative depth").
+  node: &node
     build: node
+    image: zuul-testbed-node
     volumes:
       - ${TESTBED_WORK:?}/ssh/id_rsa.pub:/home/zuul/.ssh/authorized_keys:ro
     networks: [zuul]
+
+  node-2:
+    <<: *node
 
 networks:
   zuul: {}

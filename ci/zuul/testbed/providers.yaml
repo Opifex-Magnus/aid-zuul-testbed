@@ -1,6 +1,6 @@
-# The test bed's build node (compose.yaml's `node`), for the label the base job asks for. sync.sh puts it into the
-# config project's copy, as testbed/providers.yaml, which only the test bed's tenant reads (main.yaml); on ThunderBox
-# the label's provider comes with #1345, in kristofk/aid-zuul-config.
+# The test bed's build nodes (compose.yaml's `node` and `node-2`), for the label the base job asks for. sync.sh puts
+# them into the config project's copy, as testbed/providers.yaml, which only the test bed's tenant reads (main.yaml); on
+# ThunderBox the label's provider comes with #1345, in kristofk/aid-zuul-config.
 - image:
     name: testbed-node
     type: cloud
@@ -22,8 +22,12 @@
 - provider:
     name: testbed
     section: testbed
+    # Two, compose.yaml's node and node-2: gate's window runs two pull requests' jobs at once.
     nodes:
       - name: node
+        label: aid-node
+        connection-port: 22
+      - name: node-2
         label: aid-node
         connection-port: 22
     labels:

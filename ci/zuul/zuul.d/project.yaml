@@ -1,10 +1,32 @@
 # Which of AID's jobs run in which pipeline (https://zuul-ci.org/docs/zuul/latest/config/project.html). The pipelines
 # are trusted (kristofk/aid-zuul-config); this list is not, so a pull request that adds a job here runs
-# it on itself.
+# it on itself. ci/zuul/gate.md says how check and gate do what CI's two layers and Mergify do today.
 - project:
+    # Zuul tests each pull request's commits rebased onto main and onto the pull requests ahead of it, and merges them
+    # with GitHub's rebase: main stays linear, as Mergify's fast-forward keeps it (ci/zuul/gate.md, "Merging").
+    merge-mode: rebase
+    # The cheap jobs, on every push (CI's cheap layer, `Cheap checks passed`). gate takes a pull request only once
+    # check has passed on its head.
     check:
       jobs:
         - aid-seam-lint
-    gate:
+        - aid-seam-lint-test
+        - aid-apps-lint
+        - aid-apps-lint-test
+    # Anyone's pull request, on a maintainer's comment (deploy/zuul/github.md, "Who makes Zuul run what"): the same
+    # jobs as check, which get no secret and no farm there (ci/zuul/check.mjs holds the two lists together).
+    check-external:
       jobs:
         - aid-seam-lint
+        - aid-seam-lint-test
+        - aid-apps-lint
+        - aid-apps-lint-test
+    # The full jobs, once, in the speculative queue (CI's expensive layer, `Every package passed`). The cheap ones ran
+    # on the pull request's head in check.
+    gate:
+      jobs:
+        - aid-bazel-everything
+    # Takes a pull request out of gate (kristofk/aid-zuul-config). Nothing runs.
+    hold:
+      jobs:
+        - noop

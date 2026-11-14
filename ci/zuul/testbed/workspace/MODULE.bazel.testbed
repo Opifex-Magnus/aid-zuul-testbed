@@ -1,0 +1,3 @@
+# The test bed's MODULE.bazel (sync.sh puts it at the copy's root): a stand-in for AIDepartment's, with only what the
+# gate's stand-in test needs.
+bazel_dep(name = "rules_shell", version = "0.6.1")

@@ -13,7 +13,7 @@
               # there, is told no way at all, and Zuul refuses the stanza ("Merge mode merge not supported").
               exclude:
                 - project
-              # The test bed's build node, which sync.sh adds to the copy.
+              # The test bed's build node and its jobs with a secret, which sync.sh adds to the copy.
               extra-config-paths:
                 - testbed/
         untrusted-projects:
