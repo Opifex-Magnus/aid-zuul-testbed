@@ -14,6 +14,10 @@ branch protection requires `Every package passed`, which only Mergify's queue dr
 request into a dependent pipeline only when GitHub would let it merge (its GitHub driver's `canMerge`: "required status
 checks are missing"). Every row below was seen on the test bed ([Seen working](#seen-working)).
 
+The ordinary production runs and their limits are in [comparison.md](comparison.md) (#1353): no reporting-only gate
+run or production gate timing was observed, and the missing jobs/rollout problems are tracked separately. The test
+bed's pipeline proof does not establish production job parity.
+
 ## From Mergify to Zuul
 
 | Today (Mergify / Actions) | On Zuul | Where |

@@ -14,6 +14,8 @@ x-zuul: &zuul
     ZUUL_DB_PASSWORD: ${ZUUL_DB_PASSWORD:?}
     ZUUL_GITHUB_TOKEN: ${ZUUL_GITHUB_TOKEN:?}
     ZUUL_WEBHOOK_TOKEN: ${ZUUL_WEBHOOK_TOKEN:?}
+    # Where report links point (the deployment's [web] root, deploy/zuul/web.md): zuul-web itself, here.
+    ZUUL_WEB_ROOT: http://127.0.0.1:9000/
   volumes:
     - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
     - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
@@ -107,6 +109,11 @@ services:
       # The key the executor logs into the build node with: the default private_key_file, ~/.ssh/id_rsa, of the
       # image's user, root.
       - ${TESTBED_WORK:?}/ssh:/root/.ssh:ro
+      # The build logs, as on ThunderBox (deploy/zuul/web.md, "The logs"): the store the base job's post-run copies
+      # each build's logs into, and the folder of the script that does it. zuul.conf binds both into trusted
+      # playbooks' sandbox, which fails if either is missing.
+      - ${TESTBED_WORK:?}/logs:/srv/zuul-logs
+      - ../../../deploy/zuul/executor:/etc/zuul-executor:ro
     networks: [zuul]
 
   # The build nodes, stand-ins for #1345's: the static provider in providers.yaml names them. Two, so that gate's

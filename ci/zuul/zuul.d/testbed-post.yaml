@@ -1,0 +1,6 @@
+# Added by sync.sh: the test bed's jobs with a secret, in the post pipeline (testbed/secret-probe.yaml).
+- project:
+    post:
+      jobs:
+        - testbed-secret-probe
+        - testbed-secret-guard-probe

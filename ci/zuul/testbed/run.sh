@@ -58,7 +58,7 @@ unpack() { # unpack <Secret> <key> <file>
   jq -er --arg name "$1" --arg key "$2" '.items[] | select(.metadata.name == $name) | .data[$key] | @base64d' \
     "$work/secrets.json" > "$3"
 }
-mkdir -p "$work/zookeeper-tls" "$work/client-tls" "$work/etc" "$work/ssh"
+mkdir -p "$work/zookeeper-tls" "$work/client-tls" "$work/etc" "$work/ssh" "$work/logs"
 unpack zookeeper-tls keystore.pem "$work/zookeeper-tls/keystore.pem"
 unpack zookeeper-tls ca.crt "$work/zookeeper-tls/ca.crt"
 for key in tls.crt tls.key ca.crt; do unpack zuul-zookeeper-client "$key" "$work/client-tls/$key"; done
@@ -76,10 +76,12 @@ for repository in "$TESTBED_REPOSITORY" "$config"; do
   [[ "$repository" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "'$repository' is not owner/name" >&2; exit 2; }
 done
 # The deployment's own connection github is ThunderBox's App (deploy/zuul/github.md), which the test bed does not have:
-# it is left out, and the test bed's, with the run's token, takes its place.
-awk '/^\[connection "(github|aid-events)"\]$/ { skip = 1; next } /^\[/ { skip = 0 } !skip' "$root/deploy/zuul/server/config/zuul.conf" \
+# it is left out, and the test bed's, with the run's token, takes its place. So is its statsd: the exporter it names,
+# metrics.zuul.svc.cluster.local, is not here, and Zuul's statsd client stops a service whose host does not resolve.
+awk '/^\[(connection "(github|aid-events)"|statsd)\]$/ { skip = 1; next } /^\[/ { skip = 0 } !skip' "$root/deploy/zuul/server/config/zuul.conf" \
   > "$work/etc/deployment.conf"
-[ "$(grep -c '^\[connection "github"\]$' "$work/etc/deployment.conf")" -eq 0 ] || { echo "the deployment's connection github is still there" >&2; exit 1; }
+[ "$(grep -c '^\[connection "github"\]$\|^\[connection "aid-events"\]$\|^\[statsd\]$' "$work/etc/deployment.conf")" -eq 0 ] \
+  || { echo "the deployment's connection github or aid-events, or its statsd, is still there" >&2; exit 1; }
 cat "$work/etc/deployment.conf" "$here/zuul.conf" > "$work/etc/zuul.conf"
 rm "$work/etc/deployment.conf"
 sed -e "s#@REPOSITORY@#$TESTBED_REPOSITORY#g" -e "s#@CONFIG_REPOSITORY@#$config#g" "$here/main.yaml" > "$work/etc/main.yaml"
@@ -89,6 +91,12 @@ echo "== patch"
 # The test bed's token cannot read branch protection, which Zuul asks for on every pull request: patch.py says why,
 # and changes copies of the two files of Zuul's GitHub driver that do, which compose.yaml mounts into each service.
 scheduler=$(sed -n 's/^ZUUL_SCHEDULER_IMAGE=//p' "$here/testbed.env")
+echo "== original GitHub pipelines and gate's write-approval requirement"
+docker run --rm --quiet -i --entrypoint python3 \
+  --mount "type=bind,src=$here/original-pipelines.yaml,dst=/original-pipelines.yaml,readonly" \
+  "$scheduler" - /original-pipelines.yaml < "$here/check-github-gate.py"
+echo "== MQTT publish does not wait for AID or broker acknowledgment"
+docker run --rm --quiet -i --entrypoint python3 "$scheduler" - < "$here/check-mqtt.py"
 graphql=$(docker run --rm --quiet --entrypoint python3 "$scheduler" -c \
   'import os, zuul.driver.github.graphql as g; print(os.path.dirname(g.__file__))')
 mkdir -p "$work/graphql-original"

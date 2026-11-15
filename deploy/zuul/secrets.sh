@@ -20,6 +20,11 @@
 #       for the namespace zuul-executor: node-ssh, a new ed25519 key as id_rsa, the key Zuul's executor adds to its
 #       ssh-agent for every job (it fails a job, a nodeless one too, without one). Its public half goes to stderr.
 #       #1345's deploy/zuul/node/secrets.sh makes the same Secret with the pair its build nodes accept, and replaces it.
+#   deploy/zuul/secrets.sh web --root URL
+#       for the namespace zuul: zuul-web, where report links point (zuul.conf, [web] root), the address AID's Zuul UI
+#       has, https://<AID's host>:<the UI's port>/ (web.md). A Secret, though it is no secret, because the host is the
+#       tailnet's, which this repository does not name. A new address is the same command, then a restart of the
+#       scheduler and web.
 #   deploy/zuul/secrets.sh db
 #       for the namespace zuul: zuul-db, new random passwords for the database's users zuul and
 #       root. Only before the database's first start: MariaDB sets them once, into an empty
@@ -41,6 +46,7 @@ keystore=""
 app_id=""
 app_key=""
 webhook_token=""
+root=""
 args=()
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
@@ -53,6 +59,7 @@ while [ $# -gt 0 ]; do
     --app-id) app_id=${2:?--app-id needs a value}; shift 2 ;;
     --app-key) app_key=${2:?--app-key needs a value}; shift 2 ;;
     --webhook-token) webhook_token=${2:?--webhook-token needs a value}; shift 2 ;;
+    --root) root=${2:?--root needs a value}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     *) args+=("$1"); shift ;;
@@ -206,6 +213,17 @@ case "$command" in
     ssh-keygen -q -t ed25519 -N '' -C zuul-executor -f "$tmp/id_rsa"
     secret node-ssh Opaque "id_rsa=$tmp/id_rsa"
     echo "node-ssh: $(cut -d' ' -f1,2 "$tmp/id_rsa.pub") zuul-executor" >&2
+    ;;
+
+  web)
+    [ "${#args[@]}" -eq 0 ] || { usage >&2; exit 2; }
+    [ -n "$root" ] || { echo "web needs --root" >&2; exit 2; }
+    # An origin and the path /, as AID serves an app's UI: Zuul joins t/<tenant>/... to it. No % (configparser).
+    [[ "$root" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/$ ]] \
+      || { echo "--root must be http(s)://<host>[:<port>]/, the UI's address, with the closing /" >&2; exit 2; }
+    printf '%s' "$root" > "$tmp/root"
+    secret zuul-web Opaque "root=$tmp/root"
+    echo "zuul-web: report links to $root" >&2
     ;;
 
   db)

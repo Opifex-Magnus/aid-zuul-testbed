@@ -1,0 +1,201 @@
+# The pipelines (https://zuul-ci.org/docs/zuul/latest/config/pipeline.html). Trusted: a pull request's change to this
+# file takes effect only once it is merged (README.md, "Trusted").
+#
+# Shaped as in the trial (AIDepartment#1342), which saw them work on GitHub, with AIDepartment#1344's trust model
+# (its deploy/zuul/github.md): check only for accounts with write access, check-external for anyone's pull request on
+# a maintainer's comment, and every report a check run of the GitHub App aid-zuul (aid/check, aid/check-external,
+# aid/gate). gate and hold do what Mergify does for AIDepartment today (AIDepartment#1347): its ci/zuul/gate.md maps
+# each of Mergify's rules onto them.
+
+- pipeline:
+    name: check
+    description: |
+      A pull request opened or pushed to by an account with write access, with the pull request's own job changes.
+    manager: independent
+    # Zuul knows the permission of whoever caused an event, not who wrote the pull request (AIDepartment's
+    # deploy/zuul/github.md, "Who makes Zuul run what"). So check starts only on the events the pull request's own
+    # author or a collaborator pushing to it causes: no "recheck", no reopened, no re-run, each of which a maintainer
+    # would cause on a stranger's pull request. To run check again, push. Anyone's pull request runs without the
+    # farm in check-external.
+    trigger:
+      github:
+        - event: pull_request
+          action: [opened, changed]
+          permission: write
+    start:
+      github:
+        check: in_progress
+        comment: false
+    success:
+      github:
+        check: success
+        comment: false
+    failure:
+      github:
+        check: failure
+        comment: false
+    dequeue:
+      github:
+        check: cancelled
+        comment: false
+
+- pipeline:
+    name: check-external
+    description: |
+      Any pull request, a stranger's among them, when an account with write access comments "check-external". No
+      secret, and no farm: the trusted base rejects jobs before untrusted playbooks until a credential-free
+      execution boundary exists (AIDepartment#1345).
+    manager: independent
+    trigger:
+      github:
+        - event: pull_request
+          action: comment
+          comment: (?i)^\s*check-external\s*$
+          permission: write
+    start:
+      github:
+        check: in_progress
+        comment: false
+    success:
+      github:
+        check: success
+        comment: false
+    failure:
+      github:
+        check: failure
+        comment: false
+    dequeue:
+      github:
+        check: cancelled
+        comment: false
+
+- pipeline:
+    name: gate
+    description: |
+      A pull request that is ready for review, approved by an account with write access, has passed check on its head
+      and has no "hold" label: tested in order, each on top of those ahead of it, and merged if it passes.
+    manager: dependent
+    precedence: high
+    supercedes: check
+    # What may enter, as Mergify's queue conditions today (AIDepartment's ci/zuul/gate.md): ready (no draft), check
+    # passed on the pull request's head (Mergify's "Cheap checks passed"), and no hold label. check runs only on a head
+    # an account with write access pushed (deploy/zuul/github.md), so a stranger's pull request enters only once
+    # someone with write vouches for its head by pushing to it.
+    #
+    # And approved: the two-agent loop's reviewer approves a round with nothing blocking, and only that lets the pull
+    # request in (AIDepartment#1348, ci/zuul/gate.md, "The two-agent loop"). GitHub lets nobody approve their own pull
+    # request, so the builder cannot let itself in; the accounts with write access are Kristóf's and the two bots'.
+    # Zuul reads each reviewer's newest review, and not the commit it reviewed: that an approval counts only for the
+    # head it approved is main's branch protection, which dismisses an approval on a push (AIDepartment's
+    # deploy/zuul/github.md, "Branch protection"). A request for changes by an account with write access keeps it out,
+    # until that account approves.
+    require:
+      github:
+        open: true
+        current-patchset: true
+        draft: false
+        status: aid-zuul:aid/check:success
+        review:
+          - type: approved
+            permission: write
+    reject:
+      github:
+        label: hold
+        review:
+          - type: changes_requested
+            permission: write
+    # The events after which those may have become true. Each enqueues only if the requirements hold; the requirements
+    # are read again from GitHub then, so no event lets in what they would not.
+    trigger:
+      github:
+        # Marked ready, once approved.
+        - event: pull_request
+          action: ready_for_review
+          permission: write
+        # Approved, once ready: require.github.review above checks the reviewer's write access.
+        # Zuul 14.3.0's pull_request_review trigger schema does not accept permission (AIDepartment#1535).
+        - event: pull_request_review
+          action: submitted
+          state: approved
+        # check passed on the head, after the pull request was ready: a new push to a ready pull request comes back by
+        # itself once check passes on it. GitHub sends a check run's completion to the App that made it.
+        - event: check_run
+          action: completed
+          check: aid-zuul:aid/check:success
+        - event: pull_request
+          action: unlabeled
+          label: hold
+          permission: write
+        # Mergify's requeue: after a failure, once someone has looked.
+        - event: pull_request
+          action: comment
+          comment: (?i)^\s*regate\s*$
+          permission: write
+    # The speculative window: how many pull requests at the queue's head are tested at once, each on top of those ahead
+    # of it. Two, as a Mergify batch is two today; a failure halves it (down to one, the floor), each pull request
+    # that merges adds one again (up to two, the ceiling). Build nodes bound it too: the jobs of a pull request in the
+    # window wait for nodes (AIDepartment#1345). AIDepartment's ci/zuul/gate.md, "Speculative depth", says why two.
+    window: 2
+    window-floor: 1
+    window-ceiling: 2
+    window-increase-type: linear
+    window-increase-factor: 1
+    window-decrease-type: exponential
+    window-decrease-factor: 2
+    enqueue:
+      github:
+        check: queued
+        comment: false
+    start:
+      github:
+        check: in_progress
+        comment: false
+    success:
+      github:
+        check: success
+        comment: false
+        merge: true
+    failure:
+      github:
+        check: failure
+        comment: true
+    dequeue:
+      github:
+        check: cancelled
+        comment: false
+
+- pipeline:
+    name: hold
+    description: |
+      Takes a pull request out of gate when it is labelled "hold" or turned back into a draft, as Mergify dequeues one
+      today. It runs nothing (noop) and reports nothing.
+    manager: independent
+    # A pull request enqueued here is dequeued from gate, which cancels its jobs there and starts again those of the
+    # pull requests behind it, without it. gate's requirements keep it out until hold is removed (or it is ready
+    # again), and gate's triggers bring it back.
+    supercedes: gate
+    # Taking a pull request out never lets anything in, so anyone who may label it or make it a draft may.
+    trigger:
+      github:
+        - event: pull_request
+          action: labeled
+          label: hold
+        - event: pull_request
+          action: converted_to_draft
+
+- pipeline:
+    name: post
+    description: |
+      After a merge: a push to main of a project, run on what was merged. Post-review, so it is where a job that has a
+      secret may run (AIDepartment's deploy/zuul/job-secrets.md); AIDepartment#1350 gives it the jobs that publish.
+    # Each project's newest push supersedes one still waiting: what runs is main as it is.
+    manager: supercedent
+    post-review: true
+    precedence: low
+    trigger:
+      github:
+        - event: push
+          ref: ^refs/heads/main$
+    # No reporter yet. A push has no pull request for GitHub's reporter; how post's results reach AID comes with the
+    # jobs that publish (AIDepartment#1350) and AID's events from Zuul (AIDepartment#1526). Until then each build is in
+    # Zuul's database and its API (/api/tenant/aid/builds?pipeline=post).

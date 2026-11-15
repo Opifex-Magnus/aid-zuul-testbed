@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # sync.sh: copies the layout into the test bed's two repositories (../README.md, "The test bed"):
 #   ci/zuul/testbed/sync.sh /path/to/testbed-checkout /path/to/aid-zuul-config-checkout /path/to/config-testbed-checkout
-# The test bed's checkout gets: ci/zuul/; from deploy/zuul/ the zuul.conf, ZooKeeper's configuration and secrets.sh, and
+# The test bed's checkout gets: ci/zuul/; from deploy/zuul/ the zuul.conf, ZooKeeper's configuration, secrets.sh and the
+# executor's log script (store-logs.sh, which the base job's post-run runs), and
 # the images ThunderBox runs (as testbed.env, with the config copy's repository); what AID's jobs run (a stand-in for
 # each script a job names, .bazelversion, and a Bazel workspace whose one test is the gate's stand-in, from workspace/);
 # the workflow; and TESTBED, the commits it came from.
@@ -52,6 +53,9 @@ done < <(grep -rlE '^- secret:|^ +secrets:' "$config_dest/zuul.d" || true)
 # github-actions (its GraphQL API, which Zuul reads the requirement from). aid-zuul-config's own files keep check runs
 # and the permission (AIDepartment's deploy/zuul/github.md); every change must apply, or the copy stops.
 pipelines="$config_dest/zuul.d/pipelines.yaml"
+# Keep the original before removing permissions for the workflow token. run.sh
+# checks its schema and gate's review filters with the pinned scheduler's driver.
+original_pipelines=$(cat "$pipelines")
 on_check=$(grep -c 'aid-zuul:aid/check:success$' "$pipelines" || true)
 TESTBED_CHECK_STATUS="'github-actions(\\[bot\\])?:aid/check:success'" awk '
   BEGIN { status = ENVIRON["TESTBED_CHECK_STATUS"] }
@@ -95,11 +99,13 @@ else
     echo "$pipelines: gate still requires an approving review: look at sync.sh again" >&2; exit 1
   fi
 fi
-mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/scripts" "$dest/.github/workflows"
+mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/deploy/zuul/executor" "$dest/scripts" "$dest/.github/workflows"
 cp -R "$root/ci/zuul" "$dest/ci/zuul"
+printf '%s\n' "$original_pipelines" > "$dest/ci/zuul/testbed/original-pipelines.yaml"
 cp "$root/deploy/zuul/server/config/zuul.conf" "$dest/deploy/zuul/server/config/"
 cp "$root/deploy/zuul/server/zoo.cfg" "$dest/deploy/zuul/server/"
 cp "$root/deploy/zuul/secrets.sh" "$dest/deploy/zuul/"
+cp "$root/deploy/zuul/executor/store-logs.sh" "$dest/deploy/zuul/executor/"
 # A stand-in for each script a job of AID's names: the test bed's repository is public, and holds only what Zuul needs.
 scripts=$(sed -n 's/^      script: //p' "$root/ci/zuul/zuul.d/jobs.yaml")
 [ -n "$scripts" ] || { echo "no script in ci/zuul/zuul.d/jobs.yaml: look at sync.sh again" >&2; exit 1; }
