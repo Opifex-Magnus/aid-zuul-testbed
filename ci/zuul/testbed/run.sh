@@ -147,7 +147,8 @@ secret_args=()
 loop=()
 if [ -n "${TESTBED_LOOP_PULL:-}" ]; then
   [[ "$TESTBED_LOOP_PULL" =~ ^[0-9]+$ ]] || { echo "TESTBED_LOOP_PULL '$TESTBED_LOOP_PULL' is not a pull request's number" >&2; exit 2; }
-  loop=(--loop-pull "$TESTBED_LOOP_PULL")
+  git clone --quiet --depth=1 "https://github.com/$config.git" "$work/config-source"
+  loop=(--loop-pull "$TESTBED_LOOP_PULL" --issue-closer "$work/config-source/playbooks/issues/close.py")
 fi
 python3 -I -B "$here/scenario.py" --zuul http://127.0.0.1:9000 --tenant aid --repository "$TESTBED_REPOSITORY" \
   --config-repository "$config" --checkout "$root" "${secret_args[@]}" "${loop[@]}"

@@ -50,6 +50,7 @@ import hashlib
 import hmac
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -954,7 +955,14 @@ def two_agent_loop(bed, number):
     merged = bed.merged(pull)
     expect(merged["merged_by"] is not None, f"Zuul merged it (as {merged['merged_by']['login']})")
     linear(bed, old, bed.main_head(), pull)
-    # Observe GitHub's automatic close. A manual close here hid #1656.
+    # Run the same trusted post-merge closer as production, with the testbed's
+    # own token. A manual PATCH here used to hide #1656.
+    if not bed.args.issue_closer:
+        raise Failure("The loop requires --issue-closer from the config checkout (AIDepartment#1656)")
+    trusted = runpy.run_path(bed.args.issue_closer)
+    result = trusted["close"](trusted["GitHub"](bed.args.repository, os.environ["GITHUB_TOKEN"]),
+                              old, bed.main_head(), pull["base"]["ref"], merger="github-actions[bot]")
+    log(f"  trusted post-merge closer: {result}")
     linked = bed.github.call("POST", "/graphql",
                              body={"query": query, "variables": {"o": owner, "r": name, "n": number}})
     expect([node["number"] for node in linked["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]]
@@ -976,6 +984,7 @@ def main():
     parser.add_argument("--project-key", help="the test bed's project key for the config copy, sync.sh's")
     parser.add_argument("--loop-pull", type=int,
                         help="the builder's pull request: run the two-agent loop's check (13) alone, on it")
+    parser.add_argument("--issue-closer", help="the config checkout's trusted playbooks/issues/close.py")
     args = parser.parse_args()
     bed = Testbed(args)
     if args.loop_pull:
