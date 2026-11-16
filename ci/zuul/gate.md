@@ -70,6 +70,34 @@ rebases the PR's commits: the resulting commit IDs differ. Only Zuul's App updat
 for the administrator's recorded state/recovery exception. A PR containing a merge commit
 must be rebased before GitHub can merge it this way.
 
+### Closing linked issues
+
+Rebase merging is not evidence that GitHub closed the PR's linked issues. The first live gate merge (#1652,
+2026-11-16) left #1651 open. The focused testbed also reproduced this with the pinned Zuul 14.3.0 driver's
+`mergePull(..., method="rebase")` and an Issues-write workflow token
+([run 43847454926](https://github.com/Opifex-Magnus/aid-zuul-testbed/actions/runs/43847454926)). Its linked issue
+stayed open for 90 seconds. `aid-zuul` has Issues read; raising it alone is not a tested remedy for rebase merges.
+
+The fallback is `aid-close-merged-issues`, a final, trusted, nodeless job in `aid-zuul-config`'s `post` pipeline
+([config PR #23](https://github.com/kristofk/aid-zuul-config/pull/23), **activation pending**). It reads every commit
+in the main push and its associated PRs, requires a merge into the default branch by `aid-zuul[bot]` whose merge SHA
+is in that push, then closes GitHub's `closingIssuesReferences` as completed. It uses GitHub's interpretation of
+closing keywords and links, including pagination, rather than parsing descriptions. Ordinary references stay open;
+already closed issues are left alone. A repeat of the job is safe. External issue links are reported and skipped:
+the token reaches AIDepartment alone.
+
+The job uses `aid-release`, which already holds Issues write for release/nightly reports, with a fresh token scoped
+to **Contents read, Pull requests read, Issues write**. It does not need `aid-zuul`'s private key. Its key and token
+stay on the executor and the token is revoked afterward. The shared guard rejects changes and pipelines other than
+`post`, so no PR playbook can use it. API or permission errors fail the job rather than claiming issue closure.
+
+Activation, by the owner after independent review: give `aid-release` **Pull requests: read**, accept that grant on
+its AIDepartment installation, then merge config PR #23. Its existing token helper checks the exact accepted grant.
+No gate merge method or protection change is needed. Check an ordinary merged PR's linked issue and the
+`aid-close-merged-issues` build in Zuul; a successful gate alone does not establish that this post job succeeded.
+For recovery, rerun the helper with the failed push's `oldrev`/`newrev` using a newly scoped token. Check the issue's
+closed event before marking it Done. Removing the post job rolls the fallback back; it reopens no issue.
+
 Each job has its own timeout, two hours from the trusted base unless a job reduces it.
 Waiting for a node is not part of that timeout. A timeout fails the buildset. Returning a PR
 to draft or adding `hold` dequeues it, though its check may remain pending until a later run.

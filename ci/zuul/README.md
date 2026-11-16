@@ -271,6 +271,20 @@ of which lets it in; the reviewer's approval of a held head, then the builder's 
 dismissing that approval; the reviewer's approval of the new head, which lets it in. Zuul merges it by rebase, and the
 issue closes. Sync without `TESTBED_LOOP` before the next run of checks 1 to 12.
 
+The loop now runs the config checkout's trusted issue closer after the rebase, before observing issue closure;
+it no longer PATCHes an issue merely to make the assertion pass (#1656). The focused probe runs just the pinned
+driver's real rebase merge and the same closer, checks a closing keyword against an ordinary reference, and repeats
+the closer to prove idempotence. Sync both copies from the proposed branches first, then:
+
+```sh
+gh workflow run testbed.yml --repo <you>/aid-zuul-testbed -f issue_closing_only=true
+```
+
+This exercises the merge and closure APIs with the workflow's own token. It does not prove the production App's
+accepted grant or activation; [gate.md](gate.md#closing-linked-issues) records those separately. Running
+`testbed/issue_closing.py` in the scheduler image without `--closer` observes GitHub alone and reproduces the original
+failure without manually closing the issue before the assertion.
+
 ## On ThunderBox
 
 ThunderBox's tenant ([`deploy/zuul/server/config/main.yaml`](../../deploy/zuul/server/config/main.yaml)) takes this
