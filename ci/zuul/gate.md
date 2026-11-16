@@ -78,7 +78,7 @@ Rebase merging is not evidence that GitHub closed the PR's linked issues. The fi
 ([run 43847454926](https://github.com/Opifex-Magnus/aid-zuul-testbed/actions/runs/43847454926)). Its linked issue
 stayed open for 90 seconds. `aid-zuul` has Issues read; raising it alone is not a tested remedy for rebase merges.
 
-The fallback is `aid-close-merged-issues`, a final, trusted, nodeless job in `aid-zuul-config`'s `post` pipeline
+The fallback is `aid-close-merged-issues`, a final, trusted, nodeless job in `aid-zuul-config`'s `post-issues` pipeline
 ([config PR #23](https://github.com/kristofk/aid-zuul-config/pull/23), **activation pending**). It reads every commit
 in the main push and its associated PRs, requires a merge into the default branch by `aid-zuul[bot]` whose merge SHA
 is in that push, then closes GitHub's `closingIssuesReferences` as completed. It uses GitHub's interpretation of
@@ -86,10 +86,25 @@ closing keywords and links, including pagination, rather than parsing descriptio
 already closed issues are left alone. A repeat of the job is safe. External issue links are reported and skipped:
 the token reaches AIDepartment alone.
 
+`post-issues` uses the independent manager and retains every main push, including two merges arriving while an
+earlier buildset is active. Publishing's `post` pipeline uses the supercedent manager, which may discard intermediate
+queued pushes. Issue closure must not share that pipeline: its old/new revision range would omit a dropped merge.
+The pinned-manager regression reproduces that omission with `post`, then proves `post-issues` preserves both merges
+and closes both linked issues.
+
+GitHub can deliver the rebase push before its commit-to-PR index is ready. The helper retries missing associations
+for up to a minute before treating commits with no associated PR as direct pushes.
+
+The focused testbed [run 43849085883](https://github.com/Opifex-Magnus/aid-zuul-testbed/actions/runs/43849085883)
+passed with AIDepartment `84afb9b9` and config `ee34a55`: the real pinned driver rebased PR #45; the trusted helper
+closed keyword-linked #43 as completed, left ordinary reference #44 open, and closed nothing on a repeat. Cleanup
+then closed the ordinary-reference fixture as not planned. This proves the helper's GitHub path with the workflow
+token, separately from the pending production App grant and activation below.
+
 The job uses `aid-release`, which already holds Issues write for release/nightly reports, with a fresh token scoped
 to **Contents read, Pull requests read, Issues write**. It does not need `aid-zuul`'s private key. Its key and token
 stay on the executor and the token is revoked afterward. The shared guard rejects changes and pipelines other than
-`post`, so no PR playbook can use it. API or permission errors fail the job rather than claiming issue closure.
+`post-issues`, so no PR playbook can use it. API or permission errors fail the job rather than claiming issue closure.
 
 Activation, by the owner after independent review: give `aid-release` **Pull requests: read**, accept that grant on
 its AIDepartment installation, then merge config PR #23. Its existing token helper checks the exact accepted grant.

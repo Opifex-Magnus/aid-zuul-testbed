@@ -85,6 +85,8 @@ one.
   `aid-release-github`, and never leaves the executor. Each stage gets a token made for it with only its permissions,
   for AIDepartment alone, revoked when the stage ends. The App needs **Contents: read and write** (it has it) and
   **Issues: read and write**, for the release's and the nightly's issues ([Turning it on](#turning-it-on), step 1).
+  The post-merge issue closer additionally needs **Pull requests: read**, accepted on the installation; its separate
+  token has Contents read, Pull requests read and Issues write ([activation](gate.md#closing-linked-issues), #1656).
 - **The pusher**: Zuul's own OIDC token, the secret `aid-pusher` (no stored value: Zuul signs a token as each stage
   starts, for three hours at most, the tenant's maximum). Only the `push` stage hands it to the script.
 

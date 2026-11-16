@@ -51,6 +51,9 @@ jobs:
         run: |
           source ci/zuul/testbed/testbed.env
           git clone --depth=1 "https://github.com/$TESTBED_CONFIG_REPOSITORY.git" "$RUNNER_TEMP/config"
+          docker run --rm --network=none --entrypoint python3 \
+            --mount "type=bind,src=$RUNNER_TEMP/config,dst=/config,readonly" \
+            "$ZUUL_SCHEDULER_IMAGE" -I -B /config/tests/check_issue_queue.py
           docker run --rm --entrypoint python3 -e GITHUB_TOKEN -e TESTBED_REPOSITORY \
             --mount "type=bind,src=$PWD/ci/zuul/testbed,dst=/probe,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/config/playbooks/issues,dst=/closer,readonly" \

@@ -324,6 +324,21 @@
     # post-run, AIDepartment#1350); AID's events from Zuul are AIDepartment#1526. Each build is in Zuul's database and
     # its API (/api/tenant/aid/builds?pipeline=post).
 
+# Issue closure accounts for each merge, including pushes queued while another
+# buildset runs. It must not use post's supercedent manager, which discards
+# intermediate queued pushes (AIDepartment#1656, review round 1).
+- pipeline:
+    name: post-issues
+    description: Close linked issues after every main push, retaining each merge event.
+    manager: independent
+    post-review: true
+    precedence: normal
+    trigger:
+      github:
+        - event: push
+          ref: ^refs/heads/main$
+    # No forge reporter on a push; failures are recorded under pipeline=post-issues.
+
 # AIDepartment's nightly on main (AIDepartment#1350): one pipeline per time, 02:00 and 03:00 UTC, of which its jobs let
 # through only the one that is 04:00 in Madrid, as nightly.yml's clock does on GitHub Actions (AIDepartment's
 # ci/nightly.mjs). Zuul's timer has no time zone: it fires in the scheduler's, UTC; 04:00 in Madrid is 02:00 UTC in

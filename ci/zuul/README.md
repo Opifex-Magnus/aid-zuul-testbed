@@ -280,6 +280,11 @@ the closer to prove idempotence. Sync both copies from the proposed branches fir
 gh workflow run testbed.yml --repo <you>/aid-zuul-testbed -f issue_closing_only=true
 ```
 
+The same run first executes the config checkout's `tests/check_issue_queue.py` in the pinned scheduler image,
+without network access. It reproduces `post` discarding merge B when B and C queue behind active A, then runs the
+production closer for each surviving push. The configured independent `post-issues` pipeline retains both merges
+and closes both issues. Queue storage is a stand-in; allocation and pruning use the installed Zuul manager methods.
+
 This exercises the merge and closure APIs with the workflow's own token. It does not prove the production App's
 accepted grant or activation; [gate.md](gate.md#closing-linked-issues) records those separately. Running
 `testbed/issue_closing.py` in the scheduler image without `--closer` observes GitHub alone and reproduces the original
