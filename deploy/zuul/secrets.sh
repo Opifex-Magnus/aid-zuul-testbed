@@ -25,6 +25,11 @@
 #       has, https://<AID's host>:<the UI's port>/ (web.md). A Secret, though it is no secret, because the host is the
 #       tailnet's, which this repository does not name. A new address is the same command, then a restart of the
 #       scheduler and web.
+#   deploy/zuul/secrets.sh web-admin
+#       for the namespace zuul: zuul-web-admin, a new random secret that signs the tokens of zuul-web's admin API
+#       (zuul.conf, [auth admin]; web.md, "The admin API"). Nothing outside the cluster needs a copy: admin-api.sh makes
+#       each token in web's pod. A new secret is the same command, then a restart of web; tokens signed with the old one
+#       stop working.
 #   deploy/zuul/secrets.sh db
 #       for the namespace zuul: zuul-db, new random passwords for the database's users zuul and
 #       root. Only before the database's first start: MariaDB sets them once, into an empty
@@ -224,6 +229,14 @@ case "$command" in
     printf '%s' "$root" > "$tmp/root"
     secret zuul-web Opaque "root=$tmp/root"
     echo "zuul-web: report links to $root" >&2
+    ;;
+
+  web-admin)
+    [ "${#args[@]}" -eq 0 ] || { usage >&2; exit 2; }
+    # 256 bits, as HS256's key. Hex: nothing configparser would read as an interpolation.
+    (umask 077 && openssl rand -hex 32 | tr -d '\n' > "$tmp/secret")
+    secret zuul-web-admin Opaque "secret=$tmp/secret"
+    echo "zuul-web-admin: a new signing secret for the admin API" >&2
     ;;
 
   db)

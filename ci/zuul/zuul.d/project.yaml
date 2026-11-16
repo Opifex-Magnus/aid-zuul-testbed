@@ -1,9 +1,9 @@
 # Which of AID's jobs run in which pipeline (https://zuul-ci.org/docs/zuul/latest/config/project.html). The pipelines
 # are trusted (kristofk/aid-zuul-config); this list is not, so a pull request that adds a job here runs
-# it on itself. ci/zuul/gate.md says how check and gate do what CI's two layers and Mergify do today.
+# it on itself. ci/zuul/gate.md says how check and gate do admission, validation and merging.
 - project:
     # Zuul tests each pull request's commits rebased onto main and onto the pull requests ahead of it, and merges them
-    # with GitHub's rebase: main stays linear, as Mergify's fast-forward keeps it (ci/zuul/gate.md, "Merging").
+    # with GitHub's rebase: main stays linear (ci/zuul/gate.md, "Merging").
     merge-mode: rebase
     # The cheap jobs, on every push (CI's cheap layer, `Cheap checks passed`). gate takes a pull request only once
     # check has passed on its head.
@@ -13,19 +13,63 @@
         - aid-seam-lint-test
         - aid-apps-lint
         - aid-apps-lint-test
+        - aid-cheap-checks
     # Anyone's pull request, on a maintainer's comment (deploy/zuul/github.md, "Who makes Zuul run what"): the same
-    # jobs as check, which get no secret and no farm there (ci/zuul/check.mjs holds the two lists together).
+    # job list as check (ci/zuul/check.mjs holds them together). The trusted base rejects check-external before any
+    # untrusted hook until credential-free nodes exist; these jobs inherit that guard unchanged.
     check-external:
       jobs:
         - aid-seam-lint
         - aid-seam-lint-test
         - aid-apps-lint
         - aid-apps-lint-test
+        - aid-cheap-checks
     # The full jobs, once, in the speculative queue (CI's expensive layer, `Every package passed`). The cheap ones ran
-    # on the pull request's head in check.
+    # on the pull request's head in check. aid-gate-plan names those the change needs, and Zuul skips the others
+    # (gate.md, "The gate's jobs"); this list is every job it can name (ci/zuul/gate.mjs jobs).
     gate:
       jobs:
+        - aid-gate-plan
         - aid-bazel-everything
+        - aid-bazel-graph
+        - aid-gate-ingress
+        - aid-gate-image-beeper
+        - aid-gate-image-browser
+        - aid-gate-image-build-farm-ui
+        - aid-gate-image-changedetection
+        - aid-gate-image-clock
+        - aid-gate-image-cloudflare
+        - aid-gate-image-fastmail
+        - aid-gate-image-gatus
+        - aid-gate-image-github
+        - aid-gate-image-hetzner
+        - aid-gate-image-kit
+        - aid-gate-image-nextcloud
+        - aid-gate-image-preview
+        - aid-gate-image-ssh
+        - aid-gate-image-stdio-mcp
+        - aid-gate-image-t3codebox
+        - aid-gate-image-template
+        - aid-gate-image-webhook-relay
+        - aid-gate-image-zuul
+        - aid-gate-image-zuul-ui
+        - aid-gate-aid-images
+        - aid-gate-farm-worker
+        - aid-gate-zuul-node-image
+        - aid-gate-infra-build-farm
+        - aid-gate-infra-zuul
+        - aid-gate-staging
+        - aid-gate-quarantine-swift
+        - aid-gate-quarantine-node
+    # The nightly (#1350): aid-zuul-config's periodic pipelines, one at 02:00 UTC and one at 03:00; the job's clock runs
+    # the one that is 04:00 in Madrid. Publishing (post) is aid-zuul-config's alone: every job there holds a secret
+    # (ci/zuul/publish.md).
+    periodic-0200:
+      jobs:
+        - aid-nightly
+    periodic-0300:
+      jobs:
+        - aid-nightly
     # Takes a pull request out of gate (kristofk/aid-zuul-config). Nothing runs.
     hold:
       jobs:

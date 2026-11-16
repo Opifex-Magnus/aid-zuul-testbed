@@ -55,7 +55,7 @@ done < <(grep -rlE '^- secret:|^ +secrets:' "$config_dest/zuul.d" || true)
 pipelines="$config_dest/zuul.d/pipelines.yaml"
 # Keep the original before removing permissions for the workflow token. run.sh
 # checks its schema and gate's review filters with the pinned scheduler's driver.
-original_pipelines=$(cat "$pipelines")
+cp "$pipelines" "$pipelines.original"
 on_check=$(grep -c 'aid-zuul:aid/check:success$' "$pipelines" || true)
 TESTBED_CHECK_STATUS="'github-actions(\\[bot\\])?:aid/check:success'" awk '
   BEGIN { status = ENVIRON["TESTBED_CHECK_STATUS"] }
@@ -101,7 +101,7 @@ else
 fi
 mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/deploy/zuul/executor" "$dest/scripts" "$dest/.github/workflows"
 cp -R "$root/ci/zuul" "$dest/ci/zuul"
-printf '%s\n' "$original_pipelines" > "$dest/ci/zuul/testbed/original-pipelines.yaml"
+mv "$pipelines.original" "$dest/ci/zuul/testbed/original-pipelines.yaml"
 cp "$root/deploy/zuul/server/config/zuul.conf" "$dest/deploy/zuul/server/config/"
 cp "$root/deploy/zuul/server/zoo.cfg" "$dest/deploy/zuul/server/"
 cp "$root/deploy/zuul/secrets.sh" "$dest/deploy/zuul/"
@@ -115,6 +115,12 @@ for script in $scripts; do
   printf '%s\n' '#!/usr/bin/env bash' \
     "# The test bed's stand-in for AIDepartment's $script: it shows only that its job ran it." \
     "echo \"stand-in for $script, called with: \$*\"" > "$dest/$script"
+  # The gate's plan (ci/zuul/gate.sh plan) names the full job alone: gate runs it, and Zuul skips its other jobs, which
+  # need nodes the test bed has not (testbed/providers.yaml).
+  if [ "$script" = ci/zuul/gate.sh ]; then
+    # shellcheck disable=SC2016 # the stand-in's own text
+    printf '%s\n' '[ "${3:-}" != plan ] || { mkdir -p ~/zuul-output/logs; echo '"'"'{"child_jobs": ["aid-bazel-everything"]}'"'"' > ~/zuul-output/logs/gate-plan.json; }' >> "$dest/$script"
+  fi
   chmod 755 "$dest/$script"
 done
 # The test bed's jobs with a secret (secret-probe.yaml), with the shared guard of aid-zuul-config's checkout: a
@@ -134,6 +140,7 @@ if [ -f "$config_dest/playbooks/secrets/guard.yaml" ]; then
   } > "$config_dest/testbed/secret-probe.yaml"
   mkdir -p "$config_dest/playbooks/testbed"
   cp "$here/secret-probe-run.yaml" "$config_dest/playbooks/testbed/secret-probe.yaml"
+  cp "$here/oidc-probe-run.yaml" "$config_dest/playbooks/testbed/oidc-probe.yaml"
   cat > "$dest/ci/zuul/zuul.d/testbed-post.yaml" <<'POST'
 # Added by sync.sh: the test bed's jobs with a secret, in the post pipeline (testbed/secret-probe.yaml).
 - project:
@@ -141,6 +148,7 @@ if [ -f "$config_dest/playbooks/secrets/guard.yaml" ]; then
       jobs:
         - testbed-secret-probe
         - testbed-secret-guard-probe
+        - testbed-oidc-probe
 POST
 else
   echo "the aid-zuul-config checkout has no playbooks/secrets/guard.yaml: the test bed's secret checks are left out" >&2

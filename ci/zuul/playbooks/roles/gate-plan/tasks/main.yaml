@@ -1,0 +1,13 @@
+# Gate runs only the jobs the plan names (#1521, ci/zuul/gate.md, "The gate's jobs"): ci/zuul/gate.sh plan wrote them
+# with the build's logs, and Zuul skips every other job that depends on aid-gate-plan (zuul_return's child_jobs). This
+# role decides nothing: it reads the script's list and passes it on. A plan that is missing or unreadable fails the job,
+# and with it every job behind it.
+- name: The jobs the plan names
+  ansible.builtin.slurp:
+    src: "{{ ansible_user_dir }}/zuul-output/logs/gate-plan.json"
+  register: gate_plan
+- name: Only those run
+  zuul_return:
+    data:
+      zuul:
+        child_jobs: "{{ (gate_plan.content | b64decode | from_json).child_jobs }}"

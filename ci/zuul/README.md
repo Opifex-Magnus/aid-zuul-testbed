@@ -7,9 +7,9 @@ What Zuul runs for AID (#1341, #1346), in two repositories:
   ([`deploy/zuul/job-secrets.md`](../../deploy/zuul/job-secrets.md), #1351).
 - **This folder**, AID's own project (untrusted): the job library, AID's jobs, and which pipeline runs which.
 
-Zuul's deployment, the services that run it, is [`deploy/zuul/`](../../deploy/zuul/README.md). Until Zuul's switch
-(#1355), CI stays GitHub Actions plus Mergify, and nothing here gates `main` yet: ThunderBox's tenant takes this layout
-once Zuul has its GitHub connection (#1344) and build nodes (#1345) ([On ThunderBox](#on-thunderbox)).
+Zuul's deployment is [`deploy/zuul/`](../../deploy/zuul/README.md). The cutover is held until
+the orchestrator completes [cutover.md](cutover.md); it records every live prerequisite and
+runner retirement. After that switch, Zuul alone gates main and publishes from it.
 
 | Path | What | A pull request's change to it |
 | --- | --- | --- |
@@ -17,8 +17,10 @@ once Zuul has its GitHub connection (#1344) and build nodes (#1345) ([On Thunder
 | [`zuul.d/`](zuul.d) | the job library and AID's jobs, and which pipeline runs which | runs on the pull request itself |
 | [`playbooks/`](playbooks) | the library's playbooks and their roles | runs on the pull request itself |
 | [`testbed/`](testbed) | Zuul on both, in Docker Compose, with checks | |
-| [`gate.md`](gate.md) | how `check`, `gate` and `hold` do what CI's two layers and Mergify do today, row by row | |
-| [`comparison.md`](comparison.md) | ordinary-run comparison with Actions/Mergify, reporting times and remaining coverage/rollout gaps (#1353) | |
+| [`gate.md`](gate.md) | how `check`, `gate` and `hold` admit, test and merge reviewed changes | |
+| [`comparison.md`](comparison.md) | historical ordinary-run comparison with the prior CI, reporting times and remaining coverage/rollout gaps (#1353) | |
+| [`publish.md`](publish.md) | `post` and the periodic pipelines: the app images, AID's release, the release index and the nightly on Zuul, which CI publishes (`ci/publisher`), and turning it on (#1350) | |
+| [`publish/`](publish) | the scripts those jobs run: aid-zuul-config's publishing jobs, and the nightly | runs on the pull request's own jobs only where one names it (`aid-nightly`); aid-zuul-config's jobs run `main`'s |
 
 ## Trusted and untrusted
 
@@ -56,9 +58,49 @@ the steps (#1341):
 - **`aid-script`**, abstract: `./<script> <script_args>` in the checkout, where `script` is a path under `ci/` or
   `scripts/`. The role refuses any other.
 - **AID's jobs** set those variables, and nothing else that runs. `check` runs the cheap ones, the plan job's script
-  checks of CI's cheap layer (`aid-seam-lint`, `aid-seam-lint-test`, `aid-apps-lint`, `aid-apps-lint-test`), and
-  `gate` the Bazel build and test (`aid-bazel-everything`): [gate.md](gate.md). The [comparison](comparison.md)
-  records the remaining cheap and gate coverage gaps, tracked in #1520 and #1521 before #1355.
+  checks of CI's cheap layer (`aid-seam-lint`, `aid-seam-lint-test`, `aid-apps-lint`, `aid-apps-lint-test`) plus
+  `aid-cheap-checks` (quarantine validation, CI/workflow policy, legacy capture and affected Node suites), and
+  `gate` CI's queue run, each step a job of `aid-gate` (`./ci/zuul/gate.sh`) or the Bazel build and test
+  (`aid-bazel-everything`), those the plan of `aid-gate-plan` names: [gate.md](gate.md), "The gate's jobs".
+  `periodic-0200` and `periodic-0300` run the nightly, `aid-nightly`; what publishes from `main` is aid-zuul-config's,
+  since each of those jobs holds a secret ([publish.md](publish.md)). The [comparison](comparison.md) records the
+  cheap and gate coverage gaps of 2026-11-15, which #1520 (check's) and #1521 (gate's, these jobs) close.
+
+## The cheap checks
+
+`aid-cheap-checks` calls [`cheap.mjs`](cheap.mjs) with `zuul.branch`, beside the four lint jobs in both `check` and
+`check-external`. It first runs Actions' repository commands, in order:
+
+- `node ci/quarantine.mjs check`
+- `node ci/quarantine.mjs node-test --import ./ci/test-progress.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./ci/test-file-failures.mjs --test-reporter-destination=stdout -- ci/*.test.mjs`
+- `node ci/quarantine.mjs node-test -- scripts/capture-github-legacy.test.mjs`
+
+A failed command fails the voting job before suites run. Then `ci/affected.mjs` plans the difference between
+`refs/remotes/origin/<target-branch>` and `HEAD`. Zuul preserves that remote ref as the state before the queue item's
+speculative merge ([Zuul's Git repositories](https://zuul-ci.org/docs/zuul/latest/job-content.html#git-repositories));
+it covers every commit of a rebased pull request without fetching a newer base. If the diff cannot be read, every
+Node suite runs. Unknown paths use the planner's existing full fallback.
+
+Only the plan's Node suites run, from [`../node-suites.json`](../node-suites.json), the commands shared with `ci/local-tests.mjs` and the
+Actions cutover (#1608). This registry preserves the application extraction, adapter tests and application CI tests,
+mock AID, lab and page script commands. The quarantine wrapper skips quarantined tests in the blocking runs; expired
+or invalid entries fail the initial check. A selected suite with no command fails the job. Suites run sequentially,
+with shell error propagation within each and a result for later suites even if an earlier one fails. Any failure
+fails `aid/check`; no cached or skipped policy result substitutes for success.
+
+The job node needs Node, Python, git, `cc` with libc headers (the root guard's private Linux fixtures), and `readelf`
+(the node-image checks). `deploy/zuul/node/image/` installs and checks them as the job user. The first ordinary run of
+this job on #1644, build `8bbcbf6cacc84c59ad346e58179f59f9`, failed closed because the deployed older image had neither
+`cc` nor `readelf`: its CI policy tests failed and suites did not run. The checked image containing these prerequisites
+must be published and rolled out through the existing node-image process before production check can pass. This
+change does not roll out a node or release the held cutover.
+
+The runner reads no workflow YAML for execution. While Actions remains, `ci/zuul-cheap.test.mjs` checks command
+parity against `ci.yml`, and exercises selection and failures in scratch repositories. No extra measurement run is
+needed. The Compose testbed keeps its script stand-ins and includes the new job in its scheduling assertions.
+
+The trust boundary stays in the existing trusted base: it rejects `check-external` before any untrusted hook until
+credential-free nodes exist. Adding this script job does not enable external execution or change node credentials.
 
 ## Adding or changing a job
 
@@ -86,13 +128,25 @@ request, reviewed by the other bot and merged by the orchestrator.
 1. Run the test bed with the branch ([The test bed](#the-test-bed)): it loads it as the config project, as ThunderBox
    would after the merge, and runs every check.
 2. Open the pull request there, with the test bed's run linked. Zuul's `check` on it reports a configuration error, if
-   any, before the merge.
+   any, before the merge. It must pass before a merge, and `main` there is to require it (#1526, `deploy/zuul/protect-config.sh`, pending): it is
+   the running scheduler's own load, which also knows the connections ThunderBox has deployed. The test bed has its
+   own `zuul.conf`, so a reporter on a connection that is only in this repository passes there and fails here.
 3. After the merge, Zuul loads it from `main`. `curl <zuul-web>/api/tenant/aid/config-errors` is empty if it loaded.
 
 A change that needs both repositories (a new pipeline and the jobs in it) is two pull requests. Merge the config
 project's first: until it is merged, AID's jobs cannot name the new pipeline.
 
 ## The test bed
+
+Before starting Compose, [`testbed/check-github-gate.py`](testbed/check-github-gate.py) runs in the pinned scheduler
+image against the config checkout's **original** pipelines, saved by `sync.sh` before its workflow-token adaptations.
+It uses Zuul's GitHub parser to reject schema warnings and its actual event/review filters to check every gate entry
+route: a ready, current pull request with a successful check stays out with no approval, a read-only approval or a
+comment review; write/admin approvals let it in. Write/admin requests for changes block it; read-only ones do not.
+The permission check belongs on `require.github.review` / `reject.github.review`; Zuul 14.3.0's
+[`pull_request_review` trigger schema](https://opendev.org/zuul/zuul/src/tag/14.3.0/zuul/driver/github/githubtrigger.py)
+does not accept `permission` (#1535). This probe makes no API calls: its reviews are normalized driver records, so
+it checks the permission filter separately from GitHub's permission lookup and the live scenarios below.
 
 [`testbed/`](testbed) runs Zuul, with ThunderBox's images, ZooKeeper configuration and `zuul.conf`, on both halves, in
 Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull requests
@@ -115,7 +169,11 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
    (gate.md, "Seen working");
 11. a job with a secret, defined in the config project as `deploy/zuul/job-secrets.md` says, gets it in `post` on
     `main`: its log and its build's artifact show the fixture's SHA-256, never the value. One whose secret may not go
-    to `post` is failed by aid-zuul-config's guard, `playbooks/secrets/guard.yaml`, before its run playbook;
+    to `post` is failed by aid-zuul-config's guard, `playbooks/secrets/guard.yaml`, before its run playbook. A job
+    with an OIDC secret gets a token Zuul signed, with the claims ThunderBox's pusher checks (`sub`, `pipeline`,
+    `job-name`, `aud`, its life) and the issuer its secret names, which the tenant allows, not `[web] root` (#1637).
+    Its signature is checked against the keys at `<iss>/oidc/jwks`, as the pusher fetches them ([publish.md](publish.md),
+    "The pusher");
 12. three pull requests are refused with Zuul's own words: one that lists that job in `check` ("does not allow
     post-review job"), one with a job inheriting it ("is final and can not act as a parent"), and one with a job naming
     its secret ("Secrets must be defined in the same project in which they are used"). The workflow's token opens the
@@ -256,10 +314,13 @@ without the test bed's build node:
   - no pipeline and no base job in AID's project;
   - every playbook a job names exists under `ci/zuul/playbooks/`, and every role a playbook names exists beside it;
   - every job of AID's is `aid-bazel` or `aid-script`, or inherits one of them; every role runs only Ansible's
-    `command` and `assert`;
+    `command` and `assert`, but `gate-plan`, which only reads the plan and hands its jobs to Zuul (`slurp`,
+    `zuul_return`);
   - every script a job names is under `ci/` or `scripts/`, exists and is executable;
   - AID's one project stanza merges by rebase, runs the same jobs in `check` and `check-external`, and names in each
     pipeline only AID's jobs that run (or Zuul's `noop`);
+  - `gate` runs `aid-gate-plan`, then every job its plan can name (`node ci/zuul/gate.mjs jobs`) and no other, each
+    depending on `aid-gate-plan`, on its step's node, and only the quarantine runs not voting;
   - the test bed's node has the Bazelisk that `mise.toml` pins.
 - **The test bed** ([above](#the-test-bed)), on Zuul itself, for every change to aid-zuul-config or the test bed, and
   to see a change to the library work before Zuul runs on ThunderBox.

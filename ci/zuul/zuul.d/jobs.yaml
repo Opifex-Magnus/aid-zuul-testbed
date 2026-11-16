@@ -27,8 +27,9 @@
     vars:
       script_args: []
 
-# AID's own jobs. The cheap ones (check) are the plan job's script checks of CI's cheap layer; the full one (gate) is
-# its expensive layer's Bazel build and test. The rest of CI's steps come as jobs of the same two kinds (#1353).
+# AID's own jobs. The cheap ones (check) are the plan job's checks of CI's cheap layer; the full ones (gate) are its
+# expensive layer, the merge queue's run (#1521, gate.md, "The gate's jobs"). Build logic stays in repository scripts
+# (#1341).
 
 - job:
     name: aid-seam-lint
@@ -64,14 +65,358 @@
       script: scripts/apps-lint-test.sh
 
 - job:
+    name: aid-cheap-checks
+    parent: aid-script
+    description: |
+      Quarantine validation, CI/workflow policy, legacy capture, and the affected Node suites, with Actions' commands
+      and quarantine behavior. A failure of any check or selected suite fails aid/check (#1520).
+    timeout: 1800
+    vars:
+      script: ci/zuul/cheap.mjs
+      script_args: ["{{ zuul.branch }}"]
+
+- job:
     name: aid-bazel-everything
     parent: aid-bazel
     description: |
       Builds and tests everything with a BUILD file, as CI's `bazel` job does in the merge queue's run, within the
-      base job's 2-hour timeout (ci/zuul/gate.md, "Timeouts").
+      base job's 2-hour timeout (ci/zuul/gate.md, "Timeouts"), when the gate's plan names it.
+    dependencies: [aid-gate-plan]
     vars:
       bazel_command: test
       # On the build farm, from a node with no compiler (#1345): .bazelrc's `zuul`, the farm by the cluster's address,
-      # the hermetic toolchain and no local fallback, under `dev`; the gate's `main` comes with its own nodes (#1351).
+      # the workers' installed toolchains and no local fallback, under `dev`; main gets its own nodes (#1351).
       bazel_flags: [--config=ci, --config=zuul]
       bazel_targets: ["//..."]
+
+# The gate (#1521, gate.md, "The gate's jobs"): CI's queue layer, each of its steps a job, with ci/zuul/gate.sh running
+# the step's commands. aid-gate-plan plans the change as ci.yml's plan job does (ci/zuul/gate.mjs), and every other job
+# of gate depends on it: Zuul runs those it names and skips the rest. One that runs and fails, times out or gets no node
+# fails the gate.
+- job:
+    name: aid-gate
+    parent: aid-script
+    abstract: true
+    description: |
+      One step of CI's queue layer: `ci/zuul/gate.sh <build> <branch> <step> [<name>]`.
+    vars:
+      script: ci/zuul/gate.sh
+
+# The image jobs' node (deploy/zuul/gate-node/): its own BuildKit, the scratch registry and the image-check namespace,
+# and no secret and no farm token. The staging node (deploy/zuul/staging-node/): Docker with compose.
+- nodeset:
+    name: aid-gate-image
+    nodes:
+      - name: node
+        label: aid-gate-node
+
+- nodeset:
+    name: aid-staging
+    nodes:
+      - name: node
+        label: aid-staging-node
+
+- job:
+    name: aid-gate-plan
+    parent: aid-gate
+    description: |
+      The quarantine list is valid, and the change's plan (ci/affected.mjs, as ci.yml's plan job reads it for the
+      merge queue's run) names the jobs of gate that run; Zuul skips the others.
+    run: ci/zuul/playbooks/gate-plan.yaml
+    timeout: 600
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", plan]
+
+- job:
+    name: aid-bazel-graph
+    parent: aid-gate
+    description: Every first-party dependency follows the architecture (ci/bazel-graph.mjs), as CI's `bazel` job checks it.
+    dependencies: [aid-gate-plan]
+    timeout: 1800
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", graph]
+
+- job:
+    name: aid-gate-ingress
+    parent: aid-gate
+    description: |
+      `aid` built on the build farm, and the ingress suite (ci/ingress-suite.sh) on the PR node, whole or the part the
+      plan names, as CI's `ingress` job runs it.
+    dependencies: [aid-gate-plan]
+    timeout: 3600
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", ingress]
+
+- job:
+    name: aid-gate-image-beeper
+    parent: aid-gate
+    description: The image of beeper, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, beeper]
+
+- job:
+    name: aid-gate-image-browser
+    parent: aid-gate
+    description: The image of browser, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, browser]
+
+- job:
+    name: aid-gate-image-build-farm-ui
+    parent: aid-gate
+    description: The image of build-farm-ui, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, build-farm-ui]
+
+- job:
+    name: aid-gate-image-changedetection
+    parent: aid-gate
+    description: The image of changedetection, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, changedetection]
+
+- job:
+    name: aid-gate-image-clock
+    parent: aid-gate
+    description: The image of clock, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, clock]
+
+- job:
+    name: aid-gate-image-cloudflare
+    parent: aid-gate
+    description: The image of cloudflare, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, cloudflare]
+
+- job:
+    name: aid-gate-image-fastmail
+    parent: aid-gate
+    description: The image of fastmail, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, fastmail]
+
+- job:
+    name: aid-gate-image-gatus
+    parent: aid-gate
+    description: The image of gatus, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, gatus]
+
+- job:
+    name: aid-gate-image-github
+    parent: aid-gate
+    description: The image of github, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, github]
+
+- job:
+    name: aid-gate-image-hetzner
+    parent: aid-gate
+    description: The image of hetzner, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, hetzner]
+
+- job:
+    name: aid-gate-image-kit
+    parent: aid-gate
+    description: The image of kit, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, kit]
+
+- job:
+    name: aid-gate-image-nextcloud
+    parent: aid-gate
+    description: The image of nextcloud, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, nextcloud]
+
+- job:
+    name: aid-gate-image-preview
+    parent: aid-gate
+    description: The image of preview, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, preview]
+
+- job:
+    name: aid-gate-image-ssh
+    parent: aid-gate
+    description: The image of ssh, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, ssh]
+
+- job:
+    name: aid-gate-image-stdio-mcp
+    parent: aid-gate
+    description: The image of stdio-mcp, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, stdio-mcp]
+
+- job:
+    name: aid-gate-image-t3codebox
+    parent: aid-gate
+    description: The image of t3codebox, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, t3codebox]
+
+- job:
+    name: aid-gate-image-template
+    parent: aid-gate
+    description: The image of template, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, template]
+
+- job:
+    name: aid-gate-image-webhook-relay
+    parent: aid-gate
+    description: The image of webhook-relay, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, webhook-relay]
+
+- job:
+    name: aid-gate-image-zuul
+    parent: aid-gate
+    description: The image of zuul, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul]
+
+- job:
+    name: aid-gate-image-zuul-ui
+    parent: aid-gate
+    description: The image of zuul-ui, built and checked as its app workflow and post build and check it.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul-ui]
+
+- job:
+    name: aid-gate-aid-images
+    parent: aid-gate
+    description: |
+      AID's release folder built clean, and AID's three images built and checked from it, as
+      CI's `release-folder` and `aid-images` jobs and AID's release do.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", aid-images]
+
+- job:
+    name: aid-gate-farm-worker
+    parent: aid-gate
+    description: The build farm's worker image built and checked, as CI's `farm-worker` job does.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    timeout: 3600
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", farm-worker]
+
+- job:
+    name: aid-gate-zuul-node-image
+    parent: aid-gate
+    description: Zuul's node image built and checked, as CI's `zuul-node-image` job does.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-gate-image
+    timeout: 3600
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", zuul-node-image]
+
+- job:
+    name: aid-gate-infra-build-farm
+    parent: aid-gate
+    description: The build farm's deployment checks (deploy/build-farm/check.sh), as CI's `infra-checks` job runs them.
+    dependencies: [aid-gate-plan]
+    timeout: 1800
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", infra, build-farm]
+
+- job:
+    name: aid-gate-infra-zuul
+    parent: aid-gate
+    description: Zuul's deployment checks (deploy/zuul/check.sh), as CI's `infra-checks` job runs them.
+    dependencies: [aid-gate-plan]
+    timeout: 1800
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", infra, zuul]
+
+- job:
+    name: aid-gate-staging
+    parent: aid-gate
+    description: |
+      AID's release folder built clean, and the compose stack staged and checked end to end
+      (deploy/test/staging/run.sh), as CI's `staging` job does for a pull request that changes VERSION.
+    dependencies: [aid-gate-plan]
+    nodeset: aid-staging
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", staging]
+
+# The quarantine runs (#226): they block nothing, as on GitHub Actions.
+- job:
+    name: aid-gate-quarantine-swift
+    parent: aid-gate
+    description: Each Swift package that holds a quarantined test, whole and uncached, and the quarantined tests' results.
+    dependencies: [aid-gate-plan]
+    voting: false
+    timeout: 5400
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", quarantine-swift]
+
+- job:
+    name: aid-gate-quarantine-node
+    parent: aid-gate
+    description: Each Node suite that holds a quarantined test, whole, and the quarantined tests' results.
+    dependencies: [aid-gate-plan]
+    voting: false
+    timeout: 1800
+    vars:
+      script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", quarantine-node]
+
+# The nightly full run (#1350, ci/zuul/publish.md, "The nightly"), in periodic-0200 and periodic-0300: Bazel's build and test of everything,
+# with no cached test result, once a night at 04:00 in Madrid, when ci/publisher names Zuul. Its result reaches the
+# ci-nightly issue through aid-zuul-config's aid-nightly-report, which has the token this job never gets.
+- job:
+    name: aid-nightly
+    parent: aid-script
+    description: |
+      Everything with a BUILD file, built and tested on main's head, as the nightly does on GitHub Actions, with the
+      clock of ci/nightly.mjs: of the two periodic pipelines, only the one whose time is 04:00 in Madrid runs it.
+    vars:
+      script: ci/zuul/publish/nightly.sh
+      script_args: ["{{ zuul.pipeline }}", "{{ zuul.branch }}"]

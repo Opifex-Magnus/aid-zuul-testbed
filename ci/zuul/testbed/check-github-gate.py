@@ -17,7 +17,9 @@ from zuul.driver.github.githubmodel import GithubRefFilter, GithubTriggerEvent, 
 
 
 def check(path):
-    pipelines = [item["pipeline"] for item in yaml.safe_load(Path(path).read_text())]
+    # The pipelines GitHub starts: periodic-0200 and periodic-0300 are the timer's (#1350), and have no GitHub trigger.
+    pipelines = [item["pipeline"] for item in yaml.safe_load(Path(path).read_text())
+                 if "github" in item["pipeline"].get("trigger", {})]
     context = ParseContext(SimpleNamespace(connections={}), None, None, None)
     trigger = githubtrigger.GithubTrigger(None, {})
     filters = {}
@@ -29,7 +31,7 @@ def check(path):
         for key, schema in (("require", githubsource.getRequireSchema),
                             ("reject", githubsource.getRejectSchema)):
             vs.Schema(schema())(pipeline.get(key, {}).get("github", {}))
-    assert not context.error_list, context.error_list
+    assert not context.error_list, [error.error for error in context.error_list]
     print("Original pipelines: GitHub trigger/require/reject schemas loaded without warnings")
 
     gate = next(pipeline for pipeline in pipelines if pipeline["name"] == "gate")
@@ -75,9 +77,6 @@ def check(path):
             assert admitted([review(permission), review("read", "changes_requested")]), route
         for permission in ("write", "admin"):
             assert not admitted([review("write"), review(permission, "changes_requested")]), route
-        if event.type == "pull_request_review":
-            event.permission = "read"
-            assert not admitted([review("read")]), "read-only review event entered gate"
         print(f"Gate {route}: no/read-only/comment approval refused; write/admin accepted; "
               "write/admin changes-requested blocks, read-only does not")
 

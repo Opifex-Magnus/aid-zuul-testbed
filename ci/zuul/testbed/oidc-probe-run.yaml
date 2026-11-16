@@ -1,0 +1,14 @@
+# The run playbook of the test bed's testbed-oidc-probe (secret-probe.yaml), as playbooks/testbed/oidc-probe.yaml in the
+# config project's copy: the token Zuul signed for it, as the build's artifact, which the scenario checks (check 11).
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: The token Zuul signed, as the build's artifact
+      zuul_return:
+        data:
+          zuul:
+            artifacts:
+              - name: testbed-pusher
+                url: https://zuul.invalid/testbed-pusher
+                metadata:
+                  token: "{{ testbed_pusher }}"

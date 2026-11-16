@@ -79,6 +79,10 @@ services:
     <<: *zuul
     image: ${ZUUL_WEB_IMAGE:?}
     command: ["zuul-web", "-f"]
+    environment:
+      <<: *zuul-env
+      # The admin API's signing secret ([auth admin], deploy/zuul/web.md), web's alone as on ThunderBox.
+      ZUUL_ADMIN_SECRET: ${ZUUL_ADMIN_SECRET:?}
     ports: ["127.0.0.1:9000:9000"]
     networks:
       zuul:

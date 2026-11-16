@@ -1,0 +1,6 @@
+# The run playbook of aid-gate-plan (zuul.d/jobs.yaml): the plan is a script's, as every job's work is (the role
+# script), and the role gate-plan hands the jobs it names to Zuul.
+- hosts: all
+  roles:
+    - script
+    - gate-plan

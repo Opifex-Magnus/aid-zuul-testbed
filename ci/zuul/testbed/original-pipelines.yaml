@@ -23,22 +23,64 @@
           action: [opened, changed]
           permission: write
     start:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: in_progress
         comment: false
     success:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: success
         comment: false
     failure:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: failure
         comment: false
     dequeue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: cancelled
         comment: false
 
+    enqueue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+
+    merge-conflict:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: false
+
+    config-error:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: false
+
+    no-jobs:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+
+    disabled:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
 - pipeline:
     name: check-external
     description: |
@@ -53,22 +95,64 @@
           comment: (?i)^\s*check-external\s*$
           permission: write
     start:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: in_progress
         comment: false
     success:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: success
         comment: false
     failure:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: failure
         comment: false
     dequeue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: cancelled
         comment: false
 
+    enqueue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+
+    merge-conflict:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: false
+
+    config-error:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: false
+
+    no-jobs:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+
+    disabled:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
 - pipeline:
     name: gate
     description: |
@@ -143,27 +227,67 @@
     window-decrease-type: exponential
     window-decrease-factor: 2
     enqueue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: queued
         comment: false
     start:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: in_progress
         comment: false
     success:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: success
         comment: false
         merge: true
     failure:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: failure
         comment: true
     dequeue:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
       github:
         check: cancelled
         comment: false
 
+    merge-conflict:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: true
+
+    config-error:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+      github:
+        check: failure
+        comment: true
+
+    no-jobs:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
+
+    disabled:
+      aid-events:
+        topic: aid/zuul/reports
+        qos: 1
 - pipeline:
     name: hold
     description: |
@@ -187,7 +311,7 @@
     name: post
     description: |
       After a merge: a push to main of a project, run on what was merged. Post-review, so it is where a job that has a
-      secret may run (AIDepartment's deploy/zuul/job-secrets.md); AIDepartment#1350 gives it the jobs that publish.
+      secret may run (AIDepartment's deploy/zuul/job-secrets.md): the jobs that publish (zuul.d/publish.yaml).
     # Each project's newest push supersedes one still waiting: what runs is main as it is.
     manager: supercedent
     post-review: true
@@ -196,6 +320,34 @@
       github:
         - event: push
           ref: ^refs/heads/main$
-    # No reporter yet. A push has no pull request for GitHub's reporter; how post's results reach AID comes with the
-    # jobs that publish (AIDepartment#1350) and AID's events from Zuul (AIDepartment#1526). Until then each build is in
-    # Zuul's database and its API (/api/tenant/aid/builds?pipeline=post).
+    # No reporter: a push has no pull request for GitHub's reporter. A failed release opens its issue (aid-release's
+    # post-run, AIDepartment#1350); AID's events from Zuul are AIDepartment#1526. Each build is in Zuul's database and
+    # its API (/api/tenant/aid/builds?pipeline=post).
+
+# AIDepartment's nightly on main (AIDepartment#1350): one pipeline per time, 02:00 and 03:00 UTC, of which its jobs let
+# through only the one that is 04:00 in Madrid, as nightly.yml's clock does on GitHub Actions (AIDepartment's
+# ci/nightly.mjs). Zuul's timer has no time zone: it fires in the scheduler's, UTC; 04:00 in Madrid is 02:00 UTC in
+# summer (CEST) and 03:00 in winter (CET). Two pipelines rather than one with both times, since Zuul tells a job its
+# pipeline and not when its timer fired: an item that waits for its node past the other time keeps its decision.
+# Post-review, as post: what runs is main, merged and reviewed, and the report job has a secret. No reporter: a timer's
+# item has no pull request; aid-nightly-report writes the result to AIDepartment's ci-nightly issue, and each build is
+# in Zuul's API (/api/tenant/aid/builds?pipeline=periodic-0200).
+- pipeline:
+    name: periodic-0200
+    description: AIDepartment's nightly, at 02:00 UTC (04:00 in Madrid in summer).
+    manager: independent
+    post-review: true
+    precedence: low
+    trigger:
+      timer:
+        - time: '0 2 * * *'
+
+- pipeline:
+    name: periodic-0300
+    description: AIDepartment's nightly, at 03:00 UTC (04:00 in Madrid in winter).
+    manager: independent
+    post-review: true
+    precedence: low
+    trigger:
+      timer:
+        - time: '0 3 * * *'

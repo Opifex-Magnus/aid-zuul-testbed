@@ -3,8 +3,9 @@
 // It reads the YAML as text, in the forms these files use (one job's `run:` a path, a playbook's roles a list of
 // names), and reports anything in another form rather than guess. ../zuul.test.mjs runs it in CI's Node tests.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gateJobs, PLAN_JOB } from "./gate.mjs";
 
 // AID's project: where Zuul reads its configuration (extra-config-paths) and where its playbooks are. The trusted half
 // is kristofk/aid-zuul-config (README.md, "Trusted and untrusted").
@@ -14,8 +15,13 @@ const PLAYBOOKS = "ci/zuul/playbooks/";
 const ROOT_CONFIG = ["zuul.yaml", "zuul.d", ".zuul.yaml", ".zuul.d"];
 // The library's two jobs, which every job of AID's is or inherits.
 const LIBRARY = ["aid-bazel", "aid-script"];
-// What a role may do: call a program (Bazel or a script), and check its variables first.
+// What a role may do: call a program (Bazel or a script), and check its variables first. The gate's plan role also reads
+// the plan the script wrote and hands its jobs to Zuul (gate.md, "The gate's jobs"), and decides nothing itself.
 const TASK_KEYS = new Set(["name", "when", "ansible.builtin.command", "ansible.builtin.assert"]);
+const ROLE_TASK_KEYS = { "gate-plan": new Set(["name", "ansible.builtin.slurp", "register", "zuul_return"]) };
+// The gate's jobs on the image node, the staging node, and those that block nothing (gate.md, "The gate's jobs").
+const GATE_NODESETS = { "aid-gate-image": /^aid-gate-(image-|aid-images$|farm-worker$|zuul-node-image$)/, "aid-staging": /^aid-gate-staging$/ };
+const NON_VOTING = /^aid-gate-quarantine-/;
 
 const yamlFiles = (folder) => existsSync(folder)
   ? readdirSync(folder).filter((name) => /\.ya?ml$/.test(name)).sort().map((name) => join(folder, name))
@@ -143,7 +149,7 @@ export function check(root) {
   const jobs = {};
   const projects = [];
   for (const file of yamlFiles(at(UNTRUSTED))) {
-    const where = posix.join(UNTRUSTED, file.slice(at(UNTRUSTED).length + 1));
+    const where = posix.join(UNTRUSTED, basename(file));
     for (const item of items(readFileSync(file, "utf8"))) {
       if (item.kind === null) { problems.push(`${where}: a top-level line outside a "- kind:" item: ${item.lines[0]}`); continue; }
       if (item.kind === "pipeline") problems.push(`${where}: a pipeline in AID's untrusted project; pipelines are kristofk/aid-zuul-config's`);
@@ -153,7 +159,9 @@ export function check(root) {
       if (!name) { problems.push(`${where}: a job with no name`); continue; }
       const parent = attribute(item, "parent");
       if (parent === "null") problems.push(`${where}: ${name} is a base job (parent: null); the base job is kristofk/aid-zuul-config's`);
-      jobs[name] = { where, parent, abstract: attribute(item, "abstract") === "true", script: variable(item, "script") };
+      jobs[name] = { where, parent, abstract: attribute(item, "abstract") === "true", script: variable(item, "script"),
+        run: attribute(item, "run"), dependencies: attribute(item, "dependencies"), nodeset: attribute(item, "nodeset"),
+        voting: attribute(item, "voting"), scriptArgs: variable(item, "script_args") };
       for (const key of ["pre-run", "run", "post-run", "cleanup-run"]) {
         const path = attribute(item, key);
         if (path === undefined) continue;
@@ -209,9 +217,32 @@ export function check(root) {
     }
   }
 
+  // The gate (gate.md, "The gate's jobs"): the plan first, then every job the plan can name and no other, each behind
+  // the plan, so Zuul runs only those it names; each on the node its step needs, the quarantine runs alone not voting.
+  if (project?.pipelines.gate?.length) {
+    const expected = [PLAN_JOB, ...gateJobs(root).map(({ name }) => name)];
+    if (JSON.stringify(project.pipelines.gate) !== JSON.stringify(expected)) {
+      problems.push(`${project.where}: gate runs ${project.pipelines.gate.join(", ")}; the plan's jobs are ${expected.join(", ")} (node ci/zuul/gate.mjs jobs)`);
+    }
+    const plan = jobs[PLAN_JOB];
+    if (plan && plan.run !== `${PLAYBOOKS}gate-plan.yaml`) problems.push(`${plan.where}: ${PLAN_JOB} does not run ${PLAYBOOKS}gate-plan.yaml, which hands its plan to Zuul`);
+    if (plan?.dependencies !== undefined) problems.push(`${plan.where}: ${PLAN_JOB} depends on ${plan.dependencies}; it runs first`);
+    for (const { name, app, check } of gateJobs(root)) {
+      const job = jobs[name];
+      if (!job) continue;
+      if (job.dependencies !== `[${PLAN_JOB}]`) problems.push(`${job.where}: ${name} does not depend on ${PLAN_JOB} alone (dependencies: [${PLAN_JOB}]), so the plan would not decide whether it runs`);
+      const nodeset = Object.entries(GATE_NODESETS).find(([, pattern]) => pattern.test(name))?.[0];
+      if (job.nodeset !== nodeset) problems.push(`${job.where}: ${name} runs on ${job.nodeset ?? "the PR node"}, not ${nodeset ?? "the PR node"}`);
+      if ((job.voting === "false") !== NON_VOTING.test(name)) problems.push(`${job.where}: ${name} ${job.voting === "false" ? "does not vote; only the quarantine runs block nothing" : "votes; the quarantine runs block nothing"}`);
+      // A job for one application or one check names it last, as the step's <name>.
+      const named = app ?? check;
+      if (named && name.endsWith(`-${named}`) && !(job.scriptArgs ?? "").replace(/\s/g, "").endsWith(`,${named}]`)) problems.push(`${job.where}: ${name}'s script_args do not end with ${named}`);
+    }
+  }
+
   // Every role a playbook names is beside it, and does only what a role may.
   for (const file of yamlFiles(at(PLAYBOOKS))) {
-    const where = posix.join(PLAYBOOKS, file.slice(at(PLAYBOOKS).length + 1));
+    const where = posix.join(PLAYBOOKS, basename(file));
     for (const role of playbookRoles(readFileSync(file, "utf8"))) {
       if (role === null) problems.push(`${where}: a roles entry in a form check.mjs does not read`);
       else if (!existsSync(at(`${PLAYBOOKS}roles/${role}/tasks/main.yaml`))) problems.push(`${where}: role ${role} is not in ${PLAYBOOKS}roles/`);
@@ -223,9 +254,10 @@ export function check(root) {
     if (!existsSync(at(tasks))) { problems.push(`role ${role} has no tasks/main.yaml`); continue; }
     const others = readdirSync(at(`${PLAYBOOKS}roles/${role}`)).filter((name) => !["tasks", "defaults"].includes(name));
     if (others.length) problems.push(`role ${role} has ${others.join(", ")}: a role here has only tasks/ and defaults/`);
+    const allowed = ROLE_TASK_KEYS[role] ?? TASK_KEYS;
     for (const keys of taskKeys(read(tasks))) {
-      const extra = keys.filter((key) => !TASK_KEYS.has(key));
-      if (extra.length) problems.push(`${tasks}: a task with ${extra.join(", ")}: a role runs only ansible.builtin.command and ansible.builtin.assert`);
+      const extra = keys.filter((key) => !allowed.has(key));
+      if (extra.length) problems.push(`${tasks}: a task with ${extra.join(", ")}: ${ROLE_TASK_KEYS[role] ? `the role ${role} only reads the plan and hands it to Zuul` : "a role runs only ansible.builtin.command and ansible.builtin.assert"}`);
     }
   }
 

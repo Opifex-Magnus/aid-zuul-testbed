@@ -4,6 +4,9 @@
 # (untrusted, and tested speculatively).
 - tenant:
     name: aid
+    # As ThunderBox's (#1637): an OIDC secret names zuul-web by its name on the services' network, not [web] root.
+    allowed-oidc-issuers:
+      - http://web:9000
     source:
       github:
         config-projects:

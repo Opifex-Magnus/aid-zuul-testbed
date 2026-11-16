@@ -1,3 +1,6 @@
+> Historical evidence from 2026-11-15, before #1355's cutover. Provider names and captured
+> check titles below identify the original observations; current operation is in gate.md and cutover.md.
+
 # Comparing Zuul with Actions and Mergify
 
 Issue [#1353](https://github.com/kristofk/AIDepartment/issues/1353) compares the ordinary work already run by both systems. Kristóf's instruction on that issue

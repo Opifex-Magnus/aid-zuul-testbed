@@ -12,7 +12,7 @@ GitHub here), and reads the result from Zuul's API and from the commit status Zu
   5. A proposed job can read the fixture farm token in every phase of check, but none of its
      pre/run/post/cleanup hooks execute in check-external: the trusted base rejects it first.
 
-Then the gate's rows (../gate.md, "From Mergify to Zuul"), each seen on the test bed's copies:
+Then the gate's rows (../gate.md, "Zuul's check and gate"), each seen on the test bed's copies:
 
   6. A job runs no longer than its timeout.
   7. Ready means queued: a draft whose check passed stays out of gate; once ready, it enters, gate runs the full jobs
@@ -27,7 +27,8 @@ Then the gate's rows (../gate.md, "From Mergify to Zuul"), each seen on the test
 Then the secrets for jobs (deploy/zuul/job-secrets.md), when sync.sh added the test bed's jobs with a secret:
 
   11. A job with a secret, defined in the config project, gets it in post on main; one whose secret may not go to
-     post is failed by the trusted guard before its run playbook.
+     post is failed by the trusted guard before its run playbook. A job with an OIDC secret gets a token Zuul signed,
+     with the claims ThunderBox's pusher checks (../publish.md, "The pusher").
   12. A pull request cannot have that secret: Zuul refuses it in check, a job inheriting the job, and a job naming the
      secret.
 
@@ -423,8 +424,17 @@ def layout_loads(bed):
     _, jobs = bed.zuul.get("/jobs")
     expect({"base", "aid-bazel", "aid-script", "aid-seam-lint"} <= {job["name"] for job in jobs},
            "the base job and AID's job library are loaded")
+    # The nightly (#1350), once the config project has its periodic pipelines, one per time.
+    _, pipelines = bed.zuul.get("/pipelines")
+    for name in ("periodic-0200", "periodic-0300"):
+        if name not in {pipeline["name"] for pipeline in pipelines}:
+            continue
+        _, project = bed.zuul.get(f"/project/github.com/{bed.args.repository}")
+        periodic = {job[0]["name"] for config in project.get("configs", []) for pipeline in config.get("pipelines", [])
+                    if pipeline["name"] == name for job in pipeline.get("jobs", [])}
+        expect("aid-nightly" in periodic, f"AID's project runs aid-nightly in {name} ({sorted(periodic)})")
     if bed.args.secret:
-        expect({"testbed-secret-probe", "testbed-secret-guard-probe"} <= {job["name"] for job in jobs},
+        expect({"testbed-secret-probe", "testbed-secret-guard-probe", "testbed-oidc-probe"} <= {job["name"] for job in jobs},
                "the test bed's jobs with a secret are loaded: Zuul decrypted the fixture with the imported key")
         # The key is PEM, not JSON.
         with urllib.request.urlopen(f"{bed.zuul.url}/api/tenant/{bed.zuul.tenant}/key/{bed.args.config_repository}.pub",
@@ -587,9 +597,17 @@ def external_job_cannot_read_farm(bed):
     expect(bed.commit_status(pull, pipeline="check-external") == "failure", "the external failure is reported")
 
 
-# What check and gate run (ci/zuul/zuul.d/project.yaml): the cheap jobs, and the full ones.
-CHEAP = ["aid-seam-lint", "aid-seam-lint-test", "aid-apps-lint", "aid-apps-lint-test"]
+# What check and gate run (ci/zuul/zuul.d/project.yaml): the cheap jobs, and the full ones. Gate's plan names the jobs
+# that run; on the test bed its stand-in (sync.sh) names the full job alone, and Zuul skips gate's other jobs.
+CHEAP = ["aid-seam-lint", "aid-seam-lint-test", "aid-apps-lint", "aid-apps-lint-test", "aid-cheap-checks"]
 FULL = ["aid-bazel-everything"]
+PLANNED = ["aid-gate-plan", *FULL]
+
+
+def gate_passed(builds):
+    """The plan and the jobs it named passed, and gate's other jobs, if listed, were skipped."""
+    return (all(builds.get(job) == "SUCCESS" for job in PLANNED)
+            and all(result == "SKIPPED" for job, result in builds.items() if job not in PLANNED))
 
 TIMEOUT_JOB = """\
 # Added by the test bed's pull request: a job that runs longer than its timeout.
@@ -649,7 +667,7 @@ def ready_means_queued(bed):
     old = bed.main_head()
     bed.mark_ready(pull)
     buildset, builds = bed.result(pull, "gate")
-    expect(builds == {job: "SUCCESS" for job in FULL}, f"gate ran the full jobs {FULL}, not check's, and they passed")
+    expect(gate_passed(builds), f"gate ran its plan and the full jobs it named {FULL}, not check's, and they passed")
     expect(buildset["result"] == "SUCCESS", "gate passed")
     expect(bed.commit_status(pull, pipeline="gate") == "success", "Zuul reported gate's success on the pull request")
     merged = bed.merged(pull)
@@ -743,7 +761,7 @@ def new_head_comes_back(bed):
     bed.stays_out_of_gate(pull, "Zuul has not yet heard that check passed on its new head", seconds=20)
     bed.send_check_passed(pull)
     buildset, builds = bed.result(pull, "gate")
-    expect(buildset["result"] == "SUCCESS" and builds == {job: "SUCCESS" for job in FULL},
+    expect(buildset["result"] == "SUCCESS" and gate_passed(builds),
            "check's success alone brought the new head into gate, with no ready, label or comment event, and it passed")
     bed.merged(pull)
     log(f"  ok: #{pull['number']} merged")
@@ -763,7 +781,7 @@ def post_job_gets_secret(bed):
     bed.zuul.send("push", {"ref": "refs/heads/main", "before": before, "after": main["sha"], "commits": [],
                            "repository": repository, "sender": {"login": repository["owner"]["login"]}})
     query = urllib.parse.urlencode({"project": bed.args.repository, "pipeline": "post", "complete": "true"})
-    names = {"testbed-secret-probe", "testbed-secret-guard-probe"}
+    names = {"testbed-secret-probe", "testbed-secret-guard-probe", "testbed-oidc-probe"}
 
     def done():
         _, builds = bed.zuul.get(f"/builds?{query}")
@@ -794,6 +812,42 @@ def post_job_gets_secret(bed):
     expect("has a secret, and runs only on a merged ref" in " ".join(guarded.split()),
            "the guard failed it, not anything else")
     expect("testbed secret sha256" not in guarded, "its run playbook, which uses the secret, never ran")
+    oidc_token_is_the_pushers(bed, builds["testbed-oidc-probe"])
+
+
+# What ThunderBox's pusher checks of a token (../publish.md, "The pusher"): Zuul's signature by a key Zuul publishes, and
+# the claims that make it a publishing job's. In the executor's image, which has Zuul's own PyJWT.
+VERIFY = """
+import json, sys, jwt
+given = json.load(sys.stdin)
+key = jwt.PyJWKSet.from_dict(given["jwks"])[jwt.get_unverified_header(given["token"])["kid"]].key
+print(json.dumps(jwt.decode(given["token"], key, algorithms=["RS256"], audience="thunderbox-registry")))
+"""
+
+
+def oidc_token_is_the_pushers(bed, build):
+    expect(build["result"] == "SUCCESS", "the job with an OIDC secret passed")
+    _, found = bed.zuul.get(f"/build/{build['uuid']}")
+    artifacts = {artifact["name"]: artifact.get("metadata", {}) for artifact in found.get("artifacts", [])}
+    token = artifacts.get("testbed-pusher", {}).get("token", "")
+    expect(token.count(".") == 2, "it returned the token Zuul signed for it")
+    _, configuration = request("GET", f"{bed.zuul.url}/.well-known/openid-configuration")
+    # The keys at <iss>/oidc/jwks, as the pusher fetches them: the token's iss is web by its service name, which is this
+    # zuul-web too, reached from here at bed.zuul.url.
+    _, jwks = request("GET", f"{bed.zuul.url}/oidc/jwks")
+    result = subprocess.run(["docker", "exec", "-i", os.environ["TESTBED_EXECUTOR_ID"], "python3", "-c", VERIFY],
+                            input=json.dumps({"token": token, "jwks": jwks}), capture_output=True, text=True, timeout=60)
+    expect(result.returncode == 0, f"its signature is by a key at Zuul's jwks_uri, its audience the pusher's: {result.stderr[-300:]}")
+    claims = json.loads(result.stdout)
+    log(f"  the token's claims: { {key: claims[key] for key in ('iss', 'sub', 'pipeline', 'job-name', 'tenant', 'aud')} }")
+    # The secret's own issuer (#1637), which the tenant allows, not Zuul's [web] root: the keys are the same.
+    expect(claims["iss"] == "http://web:9000" != configuration["issuer"],
+           "its issuer is the secret's, zuul-web by its service name, not [web] root")
+    expect(claims["sub"] == f"secret:{bed.zuul.tenant}/github.com/{bed.args.config_repository}/testbed-pusher",
+           "its subject names the tenant, the config project and the secret")
+    expect((claims["pipeline"], claims["job-name"], claims["tenant"]) == ("post", "testbed-oidc-probe", bed.zuul.tenant),
+           "it names the pipeline and the job that got it")
+    expect(claims["exp"] - claims["iat"] == 600, "it lasts the secret's ttl")
 
 
 SECRET_IN_CHECK = """\
@@ -895,25 +949,19 @@ def two_agent_loop(bed, number):
     old = bed.main_head()
     bed.review(pull, "APPROVE", "Round 3: nothing blocks.")
     buildset, builds = bed.result(pull, "gate")
-    expect(buildset["result"] == "SUCCESS" and builds == {job: "SUCCESS" for job in FULL},
+    expect(buildset["result"] == "SUCCESS" and gate_passed(builds),
            "the reviewer's approval of its head let it into gate, and it passed")
     merged = bed.merged(pull)
     expect(merged["merged_by"] is not None, f"Zuul merged it (as {merged['merged_by']['login']})")
     linear(bed, old, bed.main_head(), pull)
-    # GitHub closed no issue for a merge by the workflow's token on the test bed (run 43622489690): the pull request
-    # still named it as the issue it closes. On ThunderBox, Zuul merges as its App. So the issue is closed here, as
-    # completed, once the merge is seen.
+    # Observe GitHub's automatic close. A manual close here hid #1656.
     linked = bed.github.call("POST", "/graphql",
                              body={"query": query, "variables": {"o": owner, "r": name, "n": number}})
     expect([node["number"] for node in linked["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]]
            == issues, f"the merged pull request still closes #{issues[0]}")
-    issue = bed.github.repo(f"/issues/{issues[0]}")
-    if issue["state"] == "open":
-        log(f"  #{issues[0]}: GitHub did not close it for the merge by {merged['merged_by']['login']}: closing it")
-        bed.github.repo(f"/issues/{issues[0]}/comments", method="POST",
-                        body={"body": f"Done: #{number} was reviewed, gated and merged by Zuul."})
-        issue = bed.github.repo(f"/issues/{issues[0]}", method="PATCH",
-                                body={"state": "closed", "state_reason": "completed"})
+    issue = wait(f"GitHub to close #{issues[0]} after merge", lambda: next(
+        (issue for issue in [bed.github.repo(f"/issues/{issues[0]}")]
+         if issue["state"] == "closed" and issue["state_reason"] == "completed"), None), 90, interval=3)
     expect(issue["state"] == "closed" and issue["state_reason"] == "completed", f"#{issues[0]} is done")
 
 

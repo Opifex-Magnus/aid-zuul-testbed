@@ -13,6 +13,18 @@
     image: testbed-node
     flavor: testbed
 
+# The labels of the gate's image and staging nodes (ci/zuul/zuul.d/jobs.yaml's nodesets aid-gate-image and aid-staging),
+# with no node: the plan's stand-in names none of their jobs (sync.sh), so Zuul skips them and asks for no such node.
+- label:
+    name: aid-gate-node
+    image: testbed-node
+    flavor: testbed
+
+- label:
+    name: aid-staging-node
+    image: testbed-node
+    flavor: testbed
+
 - section:
     name: testbed
     connection: static
