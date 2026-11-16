@@ -44,17 +44,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: The trusted post-merge closer closes the keyword-linked issue
+      - name: Native rebase closure with Issues write and confirmed closing link
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TESTBED_REPOSITORY: ${{ github.repository }}
         run: |
           source ci/zuul/testbed/testbed.env
-          git clone --depth=1 "https://github.com/$TESTBED_CONFIG_REPOSITORY.git" "$RUNNER_TEMP/config"
-          docker run --rm --network=none --entrypoint python3 \
-            --mount "type=bind,src=$RUNNER_TEMP/config,dst=/config,readonly" \
-            "$ZUUL_SCHEDULER_IMAGE" -I -B /config/tests/check_issue_queue.py
           docker run --rm --entrypoint python3 -e GITHUB_TOKEN -e TESTBED_REPOSITORY \
             --mount "type=bind,src=$PWD/ci/zuul/testbed,dst=/probe,readonly" \
-            --mount "type=bind,src=$RUNNER_TEMP/config/playbooks/issues,dst=/closer,readonly" \
-            "$ZUUL_SCHEDULER_IMAGE" -I -B /probe/issue_closing.py --closer /closer/close.py
+            "$ZUUL_SCHEDULER_IMAGE" -I -B /probe/issue_closing.py

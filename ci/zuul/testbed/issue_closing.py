@@ -54,6 +54,21 @@ def check(closer):
         log(f"Probe: {pull['html_url']}; closes #{issues[0]}, references #{issues[1]}")
         for number in issues:
             expect(github.repo(f"/issues/{number}")["state"] == "open", f"#{number} stays open before merge")
+        owner, name = repository.split("/")
+        query = """query($owner:String!, $name:String!, $number:Int!) {
+          repository(owner:$owner, name:$name) {
+            pullRequest(number:$number) { closingIssuesReferences(first:100) { nodes { number } } }
+          }
+        }"""
+        def closing_links():
+            result = github.call("POST", "/graphql", {
+                "query": query, "variables": {"owner": owner, "name": name, "number": pull["number"]},
+            })
+            return [node["number"] for node in result["data"]["repository"]["pullRequest"]
+                    ["closingIssuesReferences"]["nodes"]]
+        links = wait("GitHub to register the closing link before merging",
+                     lambda: (links if issues[0] in (links := closing_links()) else None), 60)
+        expect(issues[1] not in links, f"closingIssuesReferences before merge: {links}")
         wait("GitHub's mergeability calculation", lambda: github.repo(f"/pulls/{pull['number']}")["mergeable"], 60)
         merged_sha = connection.mergePull(repository, pull["number"], sha=commit, method="rebase")
         merged = github.repo(f"/pulls/{pull['number']}")
