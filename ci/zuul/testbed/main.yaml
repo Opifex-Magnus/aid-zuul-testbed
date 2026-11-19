@@ -21,6 +21,9 @@
                 - testbed/
         untrusted-projects:
           - @REPOSITORY@:
+              # Load only the scenario target branch; old probe branches may hold incompatible layouts.
+              # Pull requests targeting main still load their proposed configuration speculatively.
+              include-branches: [main]
               extra-config-paths:
                 - ci/zuul/zuul.d/
       opendev.org:
