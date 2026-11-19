@@ -534,9 +534,11 @@ def unknown_label_is_refused(bed):
     pull = bed.open_pull_request("unknown-label", {"ci/zuul/zuul.d/testbed-unknown.yaml": UNKNOWN_LABEL_JOB},
                                  "Unknown node label cannot fall back to Nodepool")
     expect(bed.commit_status(pull, timeout=600) == "failure", "unknown label fails check within its deadline")
-    comments = wait(f"Zuul's comment on #{pull['number']}", lambda: bed.comments(pull), 120)
-    expect(any("testbed-nonexistent-label" in body and "label" in body.lower() for body in comments),
-           f"Zuul reports the missing label: {comments[-1][:300]!r}")
+    # Deprecation warnings may arrive before the actual configuration error.
+    comments = wait(f"Zuul's missing-label diagnostic on #{pull['number']}",
+                    lambda: [body for body in bed.comments(pull)
+                             if "testbed-nonexistent-label" in body and "label" in body.lower()], 120)
+    expect(bool(comments), f"Zuul reports the missing label: {comments[-1][:300]!r}")
     _, builds = bed.check_result(pull, timeout=120)
     expect(not builds, f"no job was dispatched for an invalid layout: {builds}")
 
