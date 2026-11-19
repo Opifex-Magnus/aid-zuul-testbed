@@ -1,5 +1,7 @@
 """Run with the pinned Zuul 14.3 runtime; no cluster or credentials required."""
 import unittest
+import collections
+import json
 import logging
 import time
 from contextlib import nullcontext
@@ -10,6 +12,8 @@ from kubernetes.client import ApiClient
 from kubernetes.client.exceptions import ApiException
 from zuul.driver.kubernetes import KubernetesDriver
 from zuul.launcher.server import Launcher
+from zuul.model import ProviderNode, QuotaInformation
+from zuul.zk.launcher import NodeCache
 from check_ssh import check_labels
 from zuul.driver.kubernetes.kubernetesmodel import KubernetesProviderNode
 import bounded
@@ -19,6 +23,15 @@ def pod(name='np0123456789abc', ready=True, phase='Running', labels=None):
     return S(metadata=S(name=name, labels=labels or {}, deletion_timestamp=None),
              status=S(pod_ip='10.42.0.5', phase=phase,
                       conditions=[S(type='Ready', status='True' if ready else 'False')]))
+
+
+def api_error(status, body):
+    # The pinned Kubernetes client's ApiException accepts an HTTP response,
+    # not a body keyword. Match the response interface used by its REST client.
+    response = S(status=status, reason='test response',
+                 data=body if isinstance(body, str) else json.dumps(body),
+                 getheaders=lambda: {})
+    return ApiException(http_resp=response)
 
 
 class Lifecycle(unittest.TestCase):
@@ -82,6 +95,111 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'collision'):
             self.create().advance()
 
+    def test_only_resource_quota_admission_waits(self):
+        for status, body in (
+                (403, {'reason': 'Forbidden', 'message': 'RBAC denied'}),
+                (403, {'reason': 'Forbidden', 'message': 'violates PodSecurity'}),
+                (403, 'not JSON'), (403, []),
+                (403, {'reason': 'Forbidden', 'message': None}), (503, None)):
+            with self.subTest(status=status, body=body):
+                self.api.create_namespaced_pod.side_effect = api_error(status, body)
+                with self.assertRaises(ApiException):
+                    self.create().advance()
+
+    def test_upstream_launcher_waits_for_n_slots_and_confirmed_deletion(self):
+        # Real launcher create loop, quota arithmetic and NodeCache accounting;
+        # only ZK persistence, Kubernetes and nodescan are stand-ins.
+        for capacity in (1, 2, 4):
+            with self.subTest(capacity=capacity):
+                self.setUp()
+                log = Mock()
+                cache = object.__new__(NodeCache)
+                cache._cached_objects = {}
+                cache._provider_quota_used = collections.defaultdict(QuotaInformation)
+                cached_quota = {}
+                provider = S(resource_limits={'pods': capacity}, canonical_name='bounded',
+                             name='bounded', endpoint=self.endpoint, launch_timeout=60)
+
+                def account(node):
+                    NodeCache._handleQuota(cache, ProviderNode.ALLOCATED_STATES,
+                        cached_quota, cache._provider_quota_used,
+                        None, None, None, node.uuid, node)
+
+                launcher = S(log=log, wake_event=Mock(),
+                    createZKContext=lambda *args: nullcontext(None),
+                    _getProviderForNode=lambda node: provider,
+                    getImageExternalId=lambda *args: None,
+                    _emitMessages=lambda *args: None,
+                    _setSubnodeStates=lambda *args: None,
+                    _checkNodescanRequest=lambda *args: True,
+                    getProviderQuota=lambda p: QuotaInformation(default=float('inf')),
+                    _getUniqueProviders=lambda: [provider], api=S(nodes_cache=cache))
+                launcher.getProviderQuotaAvailable = lambda *a, **kw: Launcher.getProviderQuotaAvailable(launcher, *a, **kw)
+                launcher.doesProviderHaveQuotaForNode = lambda *a: Launcher.doesProviderHaveQuotaForNode(launcher, *a)
+                provider.getCreateStateMachine = lambda node, *a: bounded.Create(
+                    self.endpoint, node, 'np' + node.uuid, self.label, None, self.image, log)
+                self.node._lock = None
+                self.node.activeContext = lambda ctx: nullcontext(None)
+                self.node.create_state_machine = None
+                self.node.State = ProviderNode.State
+                self.node.state = ProviderNode.State.REQUESTED
+                self.node.quota = QuotaInformation(pods=1)
+                self.node.provider = provider.canonical_name
+                self.node.subnodes = []
+                self.node.releaseLock = Mock()
+                def set_state(state):
+                    self.node.state = state
+                    account(self.node)
+                self.node.setState = set_state
+                cache._cached_objects[self.node.uuid] = self.node
+                predecessors = []
+                for index in range(capacity):
+                    predecessor = S(uuid=str(index), provider=provider.canonical_name,
+                        # USED is retained during cleanup in Zuul 14.3;
+                        # it has no separate DELETING provider-node state.
+                        state=ProviderNode.State.USED, quota=QuotaInformation(pods=1),
+                        delete_state={}, kubernetes_namespace_id='old' + str(index))
+                    cache._cached_objects[predecessor.uuid] = predecessor
+                    account(predecessor)
+                    predecessors.append(predecessor)
+                Launcher._checkNodeCreate(launcher, self.node, log)
+                self.api.create_namespaced_pod.assert_not_called()
+                deletion = bounded.Delete(self.endpoint, predecessors[0], log)
+                deletion.advance()  # DELETE accepted, pod still present
+                self.assertFalse(deletion.complete)
+                Launcher._checkNodeCreate(launcher, self.node, log)
+                self.api.create_namespaced_pod.assert_not_called()
+                self.api.read_namespaced_pod.side_effect = ApiException(status=404)
+                deletion.advance()
+                self.assertTrue(deletion.complete)
+                del cache._cached_objects[predecessors[0].uuid]
+                account(predecessors[0])
+
+                # Cached slot is free, but API admission still sees full quota
+                # (unmanaged pod or delayed quota reconciliation).
+                self.api.create_namespaced_pod.side_effect = api_error(403,
+                    {'reason': 'Forbidden', 'message':
+                     'pods "np": forbidden: exceeded quota: budget, requested: pods=1'})
+                self.api.read_namespaced_pod.side_effect = None
+                with patch('time.time', return_value=time.time() + provider.launch_timeout * 10), \
+                     patch('bounded.time.monotonic', return_value=100):
+                    Launcher._checkNodeCreate(launcher, self.node, log)
+                    machine = self.node.create_state_machine
+                    self.assertEqual(machine.state, machine.START)
+                    self.assertEqual(self.node.state, ProviderNode.State.REQUESTED)
+                    self.assertFalse(machine.complete)
+                    # No hammering the API during the retry delay.
+                    Launcher._checkNodeCreate(launcher, self.node, log)
+                    self.api.create_namespaced_pod.assert_called_once()
+                self.node.create_state = machine.toDict()
+                self.node.create_state_machine = None  # launcher restart
+                self.api.create_namespaced_pod.side_effect = None
+                Launcher._checkNodeCreate(launcher, self.node, log)
+                self.assertEqual(self.node.state, ProviderNode.State.READY)
+                self.assertEqual(cache.getQuota(provider).getResources()['pods'], capacity)
+                self.assertEqual(self.api.create_namespaced_pod.call_count, 2)
+                self.node.updateFromInstance.assert_called_once()
+
     def test_delete_waits_until_pod_is_gone_and_survives_restart(self):
         self.node.kubernetes_namespace_id = 'np0123456789abc'
         machine = bounded.Delete(self.endpoint, self.node, None)
@@ -134,8 +252,8 @@ class Lifecycle(unittest.TestCase):
         self.node.activeContext = lambda ctx: nullcontext(None)
         self.node.nodescan_request = None
         self.node.delete_state_machine = None
-        self.node.state = 'deleting'
-        self.node.State = S(REBUILDING='rebuilding')
+        self.node.state = ProviderNode.State.USED
+        self.node.State = ProviderNode.State
         self.node.request_id = 'request'
         self.node.delete = Mock()
         self.node.releaseLock = Mock()

@@ -137,6 +137,10 @@ export function check(root) {
 
   // The test bed's tenant reads AID's project from its folder, and the config project's copy only for testbed/: its
   // build node and its jobs with a secret.
+  const testTenant = items(read("ci/zuul/testbed/main.yaml")).find(({ kind }) => kind === "tenant");
+  if (!testTenant || attribute(testTenant, "use-nodepool") !== "false") {
+    problems.push("the test bed's tenant must disable Nodepool fallback with use-nodepool: false");
+  }
   const tenant = tenantPaths(read("ci/zuul/testbed/main.yaml"));
   const configPaths = Object.values(tenant).flatMap((source) => source.config);
   const untrustedPaths = Object.values(tenant).flatMap((source) => source.untrusted);

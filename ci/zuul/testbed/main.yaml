@@ -4,6 +4,8 @@
 # (untrusted, and tested speculatively).
 - tenant:
     name: aid
+    # All labels come from native providers; there is no Nodepool service (#1492).
+    use-nodepool: false
     # As ThunderBox's (#1637): an OIDC secret names zuul-web by its name on the services' network, not [web] root.
     allowed-oidc-issuers:
       - http://web:9000

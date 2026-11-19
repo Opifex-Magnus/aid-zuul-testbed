@@ -301,6 +301,7 @@ without the test bed's build node:
 ```yaml
 - tenant:
     name: aid
+    use-nodepool: false
     source:
       github:
         config-projects:
@@ -344,3 +345,10 @@ without the test bed's build node:
   - the test bed's node has the Bazelisk that `mise.toml` pins.
 - **The test bed** ([above](#the-test-bed)), on Zuul itself, for every change to aid-zuul-config or the test bed, and
   to see a change to the library work before Zuul runs on ThunderBox.
+
+Native providers own every production build label; tenant `aid` disables Nodepool fallback.
+The Compose tenant does too: its `unknown_label_is_refused` scenario requires a configuration failure
+naming an unknown label and no dispatched builds. Existing legacy requests need cancellation and
+current-head replay; changing the flag alone cannot migrate them. The
+[native-launcher migration runbook](../../deploy/thunderbox/zuul.md#completing-the-native-launcher-migration-1492)
+requires a real successful Zuul dispatch alongside node readiness and direct SSH/remote Bazel checks.

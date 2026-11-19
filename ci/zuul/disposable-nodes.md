@@ -45,6 +45,18 @@ SSH probe. A launch retry adopts only a pod with the same Zuul identity. A faile
 by its deterministic name, even if the API succeeded before ZooKeeper saved the response. Pod tags let the upstream
 leak collector remove abandoned allocations after a launcher outage. API failures are logged and retried. Even Zuul's delete timeout retains the allocation; only a confirmed API 404 releases its slot.
 
+A ResourceQuota admission rejection (`403 Forbidden`, `exceeded quota:`) leaves the create state at
+`START`: the launcher rechecks its configured N-slot limit before every attempt. Retained deleting
+allocations continue to count until a pod read confirms `404`. If the API still reports full quota
+because of an unmanaged pod or delayed quota reconciliation, admission retries at most once every
+five seconds, without consuming the launch timeout or failing the request. Restarting the launcher
+resumes this wait. RBAC, policy denials and other API errors still fail visibly; this does not change
+quotas or delete other occupants to make room.
+
+The proposed separate gate non-image pool, its capacity constraints and coordinated
+trusted-config rollout are in [gate-compute-design.md](gate-compute-design.md) (#1867).
+That design is not yet an activated provider.
+
 ## Provider migration prerequisite (#1754)
 
 Scaling a static StatefulSet to zero does not retire its Zuul allocations. cfg#30 reused static

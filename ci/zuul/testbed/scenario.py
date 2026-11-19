@@ -7,6 +7,7 @@ GitHub here), and reads the result from Zuul's API and from the commit status Zu
   1. The layout loads: the copy of kristofk/aid-zuul-config as the config project, and AID's project, with no
      configuration error.
   2. A pull request that adds a job runs that job on itself, before it exists on main.
+  Additionally, an unknown node label fails configuration without dispatching builds (Nodepool is disabled).
   3. A pull request that defines a base job in AID's project is refused, with a configuration error.
   4. A pull request that defines a pipeline in AID's project is refused, with a configuration error.
   5. A proposed job can read the fixture farm token in every phase of check, but none of its
@@ -510,6 +511,36 @@ def untrusted_base_job_is_refused(bed):
            f"its comment says why: {comments[-1][:300]!r}")
 
 
+UNKNOWN_LABEL_JOB = """\
+- job:
+    name: aid-testbed-unknown-label
+    parent: aid-script
+    nodeset:
+      nodes:
+        - name: node
+          label: testbed-nonexistent-label
+    vars:
+      script: scripts/seam-lint.sh
+
+- project:
+    check:
+      jobs:
+        - aid-testbed-unknown-label
+"""
+
+
+def unknown_label_is_refused(bed):
+    log("An unknown label is a configuration error, without a Nodepool request")
+    pull = bed.open_pull_request("unknown-label", {"ci/zuul/zuul.d/testbed-unknown.yaml": UNKNOWN_LABEL_JOB},
+                                 "Unknown node label cannot fall back to Nodepool")
+    expect(bed.commit_status(pull, timeout=600) == "failure", "unknown label fails check within its deadline")
+    comments = wait(f"Zuul's comment on #{pull['number']}", lambda: bed.comments(pull), 120)
+    expect(any("testbed-nonexistent-label" in body and "label" in body.lower() for body in comments),
+           f"Zuul reports the missing label: {comments[-1][:300]!r}")
+    _, builds = bed.check_result(pull, timeout=120)
+    expect(not builds, f"no job was dispatched for an invalid layout: {builds}")
+
+
 PIPELINE = """\
 - pipeline:
     name: testbed-untrusted
@@ -992,7 +1023,7 @@ def main():
     if args.loop_pull:
         checks = [layout_loads, lambda bed: two_agent_loop(bed, args.loop_pull)]
     else:
-        checks = [layout_loads, new_job_runs_speculatively, untrusted_base_job_is_refused,
+        checks = [layout_loads, new_job_runs_speculatively, unknown_label_is_refused, untrusted_base_job_is_refused,
                   untrusted_pipeline_is_refused, external_job_cannot_read_farm, job_timeout, ready_means_queued,
                   hold, speculative_queue, new_head_comes_back]
         if args.secret:

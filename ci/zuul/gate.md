@@ -36,17 +36,24 @@ How the build-and-review loop (`docs/review-loop.md`) runs on Zuul.
 - **Hold and dequeue.** The label `hold`, or turning the pull request back into a draft, takes it out of gate and
   keeps it out. Removing the label, or marking it ready again, brings it back, if it still meets gate's requirements.
   Zuul has no dequeue command for the bots: `hold` is theirs.
-- **Requeue.** A comment `regate` by an account with write access asks gate to take the pull request again: after a
+- **Requeue.** An account with write access posts a comment whose entire body is `regate` to ask gate to take the
+  pull request again (case-insensitive, surrounding whitespace allowed). `please regate`, or an explanation with
+  `regate` on another line, does not match the anchored trigger. Use it after a
   failure that was not its code (a flake, whose issue is filed first; a lost node), or when it should be in gate and
   is not (below). The requirements are read again, so `regate` lets in nothing that is not ready, approved and
   checked: `aid-zuul:aid/check:success` must cover the current head. It cannot recover a failed `check`; use
   [same-head check recovery](../../deploy/zuul/web.md#recovering-check-on-the-same-head) for a recorded unrelated
   failure there. `recheck` has no trigger. After a failure caused by its code, the builder pushes the fix and
-  requests the review again.
+  requests the review again. Before retrying, check `gh pr view <n> --json mergeable,mergeStateStatus`: a conflict
+  with main is silently refused before enqueue, including through the admin API. `UNKNOWN` needs another check
+  after GitHub finishes calculating; `CONFLICTING` needs a rebase onto current `origin/main`, conflict resolution,
+  affected tests, a push with `--force-with-lease` and a new review/check of that head. See
+  [enqueue refusal diagnostics](#enqueue-refusal-diagnostics).
 - **What Zuul reports, and checking that it was queued.** gate reports on the pull request as the check run
   `aid/gate`: queued, then in progress, then success and the merge, or failure with a comment that names the failed
   job and links its log. About 10 minutes after the pull request is ready, approved and `aid/check` passed on its
-  head, `aid/gate` is there. If it is not (GitHub's event came late or not at all), comment `regate`, once. If that
+  head, `aid/gate` is there. If it is not, check mergeability first as above; once mergeable, post a whole-comment
+  `regate`, once (GitHub's event may have come late or not at all). If that
   starts nothing either, tell the orchestrator. An approved pull request of kristofk/aid-zuul-config enters gate too,
   which has no jobs for it: `aid/gate` goes from queued to skipped, and the orchestrator merges it (#1660).
 - **What wakes the bots.** The loop's automations ([`docs/review-loop.md`](../../docs/review-loop.md), "How AID routes
@@ -66,6 +73,34 @@ How the build-and-review loop (`docs/review-loop.md`) runs on Zuul.
   pull request that changes the same file under `internal/` does not rebase: Zuul reports the merge failure, and the
   builder rebases and pushes. Waiting for an empty gate would hold the orchestrator's tick for as long as gate's runs
   take, without making any test truer.
+
+## Enqueue refusal diagnostics
+
+In Zuul 14.3.0, the dependent manager checks GitHub's mergeability before it creates a queue item.
+A refusal such as `Github detected a merge conflict` normally reaches only DEBUG logs; neither the
+`enqueue` nor `merge-conflict` reporter handles this pre-admission refusal. The latter handles conflicts
+found while preparing an admitted item. An admin enqueue returning HTTP 200 can still leave the PR out
+of gate. Check mergeability and actual `aid/gate` admission rather than repeating retries (#1880).
+
+There is a supported diagnostic option for GitHub event triggers:
+[`pipeline.trigger.github.debug`](https://zuul-ci.org/docs/zuul/14.3.0/drivers/github.html#attr-pipeline.trigger.github.debug).
+The trusted `kristofk/aid-zuul-config` owner can add `debug: true` to gate's existing whole-comment
+`regate` trigger (preserving its write permission and all pipeline requirements). In that version,
+`DependentPipelineManager.areChangesReadyToBeEnqueued` then adds the refusal reason to warnings and
+`PipelineManager._reportNonEnqueuedItem` sends it via the **failure** reporters, which already post a
+GitHub check and comment in the trusted gate configuration. Merely adding a `merge-conflict` reporter
+or changing its message does not fix this path. These code paths are in the
+[Zuul 14.3.0 source release](https://pypi.org/project/zuul/14.3.0/#files).
+
+That trusted-config change needs a regression test: an otherwise eligible conflicting PR plus bare
+`regate` must report the merge-conflict reason without running jobs; an eligible non-conflicting PR
+must still enter gate, and permission/approval/hold checks must remain enforced. The refusal also
+reaches gate's `aid-events` failure reporter and records a failure buildset; test that the loop's
+automations handle it as an enqueue refusal rather than a gate flake or code failure. This repository's
+job definitions cannot change trusted pipeline triggers, so this documents a follow-up, not an enabled
+live diagnostic. Trigger debug is verbose and only applies to that trigger; it does not cover admin
+enqueue. Reporting admin pre-admission refusals remains a separate upstream follow-up, without a
+local Zuul patch.
 
 ## Merging
 

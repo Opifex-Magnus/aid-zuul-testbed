@@ -6,6 +6,7 @@ from admin-owned PodTemplates in existing bounded namespaces. No job may supply 
 pod spec. Only the launcher loads this module; scheduler validation stays upstream.
 """
 import copy
+import json
 import re
 import time
 from enum import StrEnum
@@ -47,11 +48,25 @@ def instance(pod):
     return result
 
 
+def quota_exceeded(error):
+    """Recognize ResourceQuota admission, never an RBAC/policy denial."""
+    if error.status != 403:
+        return False
+    try:
+        status = json.loads(error.body)
+    except (TypeError, ValueError):
+        return False
+    return (isinstance(status, dict) and status.get('reason') == 'Forbidden'
+            and isinstance(status.get('message'), str)
+            and 'exceeded quota:' in status['message'])
+
+
 class Create(statemachine.StateMachine):
     def __init__(self, endpoint, node, hostname, label, flavor, image, log):
         super().__init__(node.create_state)
         self.endpoint, self.node, self.hostname = endpoint, node, hostname
         self.label = label
+        self.retry_after = 0
         namespace(endpoint)
         if label.kind != 'pod' or image.connection_type != 'ssh':
             raise ValueError('bounded Kubernetes nodes require kind pod and SSH')
@@ -60,6 +75,8 @@ class Create(statemachine.StateMachine):
         ep, node = self.endpoint, self.node
         ns = namespace(ep)
         if self.state == self.START:
+            if time.monotonic() < self.retry_after:
+                return
             # Persist the identity before create: an interrupted/failed launch must
             # still be deletable. A retry after an uncertain API answer is idempotent.
             node.kubernetes_namespace_id = self.hostname
@@ -77,6 +94,13 @@ class Create(statemachine.StateMachine):
             try:
                 ep.core_client.create_namespaced_pod(ns, pod)
             except ApiException as error:
+                if quota_exceeded(error):
+                    # Stay REQUESTED: upstream rechecks N-slot provider quota
+                    # and resets the launch clock while in START. Admission can
+                    # race its cache, or unmanaged/terminating pods can fill the
+                    # namespace. Only API admission confirms a slot is free.
+                    self.retry_after = time.monotonic() + 5
+                    return
                 if error.status != 409:
                     raise
                 existing = ep.core_client.read_namespaced_pod(self.hostname, ns)
