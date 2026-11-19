@@ -180,7 +180,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, beeper]
 
@@ -191,7 +193,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, browser]
 
@@ -202,7 +206,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, build-farm-ui]
 
@@ -213,7 +219,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, changedetection]
 
@@ -224,7 +232,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, clock]
 
@@ -235,7 +245,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, cloudflare]
 
@@ -246,7 +258,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, fastmail]
 
@@ -257,7 +271,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, gatus]
 
@@ -268,7 +284,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, github]
 
@@ -279,7 +297,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, hetzner]
 
@@ -290,7 +310,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, kit]
 
@@ -301,7 +323,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, nextcloud]
 
@@ -312,7 +336,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, preview]
 
@@ -323,7 +349,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, ssh]
 
@@ -334,7 +362,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, stdio-mcp]
 
@@ -345,7 +375,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, t3codebox]
 
@@ -356,7 +388,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, template]
 
@@ -367,7 +401,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, webhook-relay]
 
@@ -378,7 +414,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul]
 
@@ -389,7 +427,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul-ui]
 
@@ -402,7 +442,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", aid-images]
 
@@ -413,7 +455,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", farm-worker]
@@ -425,7 +469,9 @@
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
     semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", zuul-node-image]

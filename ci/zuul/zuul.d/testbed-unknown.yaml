@@ -1,0 +1,14 @@
+- job:
+    name: aid-testbed-unknown-label
+    parent: aid-script
+    nodeset:
+      nodes:
+        - name: node
+          label: testbed-nonexistent-label
+    vars:
+      script: scripts/seam-lint.sh
+
+- project:
+    check:
+      jobs:
+        - aid-testbed-unknown-label
