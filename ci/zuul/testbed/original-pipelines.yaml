@@ -279,10 +279,16 @@
         check: failure
         comment: true
 
+    # A pull request of a project with no gate jobs, this repository's own (zuul.d/project.yaml): gate takes in any
+    # approved one, reports aid/gate queued before it knows the jobs, and then has nothing to run or merge. skipped
+    # completes aid/gate, which GitHub counts as passed; the orchestrator merges it as before (AIDepartment#1660).
     no-jobs:
       aid-events:
         topic: aid/zuul/reports
         qos: 1
+      github:
+        check: skipped
+        comment: false
 
     disabled:
       aid-events:
@@ -323,21 +329,6 @@
     # No reporter: a push has no pull request for GitHub's reporter. A failed release opens its issue (aid-release's
     # post-run, AIDepartment#1350); AID's events from Zuul are AIDepartment#1526. Each build is in Zuul's database and
     # its API (/api/tenant/aid/builds?pipeline=post).
-
-# Issue closure accounts for each merge, including pushes queued while another
-# buildset runs. It must not use post's supercedent manager, which discards
-# intermediate queued pushes (AIDepartment#1656, review round 1).
-- pipeline:
-    name: post-issues
-    description: Close linked issues after every main push, retaining each merge event.
-    manager: independent
-    post-review: true
-    precedence: normal
-    trigger:
-      github:
-        - event: push
-          ref: ^refs/heads/main$
-    # No forge reporter on a push; failures are recorded under pipeline=post-issues.
 
 # AIDepartment's nightly on main (AIDepartment#1350): one pipeline per time, 02:00 and 03:00 UTC, of which its jobs let
 # through only the one that is 04:00 in Madrid, as nightly.yml's clock does on GitHub Actions (AIDepartment's

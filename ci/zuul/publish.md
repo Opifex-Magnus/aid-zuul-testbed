@@ -1,6 +1,6 @@
 # Publishing from main on Zuul
 
-Zuul's trusted `post` jobs publish app images, AID releases and the release index from main;
+Zuul's trusted `post` jobs publish app images, AID releases, the release index and AID's infrastructure images from main;
 its periodic jobs run the nightly. The job definitions and secrets live in `kristofk/aid-zuul-config`;
 repository entrypoints are under [`publish/`](publish). This document describes the target after
 #1355's [held cutover](cutover.md). The existing turn-on procedure below remains **pending #1350
@@ -11,7 +11,7 @@ through step 7**; do not remove the hold until its live publishing evidence is r
 
 | Pipeline | Starts on | Who can start it | Post-review | Its jobs |
 | --- | --- | --- | --- | --- |
-| `post` | a push to `main` | Zuul's `gate`, or the documented administrator state/recovery exception. `main` is protected, so nobody else | yes | `aid-release-credentials` (#1351), `aid-publish-apps`, `aid-release` |
+| `post` | a push to `main` | Zuul's `gate`, or the documented administrator state/recovery exception. `main` is protected, so nobody else | yes | `aid-release-credentials` (#1351), `aid-publish-apps`, `aid-release`, `aid-publish-images` (#1650) |
 | `periodic-0200`, `periodic-0300` | a timer, at 02:00 UTC and at 03:00 UTC | nobody: Zuul's clock, on `main`'s head | yes | `aid-nightly` (this repository's), `aid-nightly-report` |
 
 Both are aid-zuul-config's (`zuul.d/pipelines.yaml`), and post-review, so the only pipelines where a job with a secret
@@ -35,10 +35,13 @@ playbooks of their own, and each stage gets only the credentials it uses, made a
 
 | Stage | App images (`aid-publish-apps`, [`publish/apps.sh`](publish/apps.sh)) | AID's release (`aid-release`, [`publish/release.sh`](publish/release.sh)) | Credentials |
 | --- | --- | --- | --- |
-| `build` | for every app whose payload the push changed (`ci/image-policy.mjs`): the image built with BuildKit, checked as AID starts it, its declaration written | the plan (`VERSION` changed, unreleased, the changelog dated); the release folder built clean (`deploy/release-folder.sh`, #1298); the three images built and checked; the keychain asset and the entry written | the App's token, `contents: read`, for the push's base and the tags |
-| `push` | each image through ThunderBox's pusher | the version still unreleased, then the three images through the pusher | Zuul's token for the pusher; the release also the App's, `contents: read` |
+| `build` | plan against the index and registry: build/check changed payloads only for unpublished versions; prepare missing current-version entries using their existing registry digests, including after unrelated pushes | the plan (`VERSION` changed, unreleased, the changelog dated); the release folder built clean (`deploy/release-folder.sh`, #1298); the three images built and checked; the keychain asset and the entry written | the App's token, `contents: read`, for the push's base and the tags |
+| `push` | each new image through ThunderBox's pusher; recovered versions need no push | the version still unreleased, then the three images through the pusher | Zuul's token for the pusher; the release also the App's, `contents: read` |
 | `record` | each pushed image's declaration into the release index | the GitHub Release `aid-v<version>`, then its entry into the index | the App's token, `contents: write` |
 | `report` | | after a failure only: the release's issue | the App's token, `issues: write` |
+
+The release folder uses the post node's cgroup CPU and memory budget (#1695), with no separate
+`RELEASE_JOBS` override; size the post node's pod instead ([executor resources](README.md#executor-resources)).
 
 What a stage hands to the next is in `ZUUL_STATE` on the node: the plan, the images by digest, the declarations and
 the entry, as files. Nothing goes through a forge's artifacts (#1286). Zuul runs a job's next playbook only after one
@@ -59,17 +62,39 @@ App's token, read by git from its file.
 The job's timeout is the tenant's maximum, two hours, for all its stages: each copy through the pusher may take 15
 minutes (`CI_PUBLISH_TIMEOUT_SECONDS`), where Actions allows an hour.
 
+### The infrastructure images
+
+`aid-publish-images` ([`publish/images.sh`](publish/images.sh), #1650) publishes the images AID's CI runs on, which
+GitHub Actions' `zuul-node-image.yml` and `build-farm-worker.yml` published until #1608 removed them:
+
+| Image | Built and checked by | Published as | Applied by |
+| --- | --- | --- | --- |
+| The PR node's | `node ci/zuul-node-image.mjs build` | `aid/zuul-node:ubuntu26.04-<commit>` | [`deploy/zuul/node/README.md`](../../deploy/zuul/node/README.md) |
+| The post node's and the gate image node's | the same build, its `post` target | `aid/zuul-node:post-ubuntu26.04-<commit>` | [`deploy/zuul/post-node/README.md`](../../deploy/zuul/post-node/README.md), [`deploy/zuul/gate-node/README.md`](../../deploy/zuul/gate-node/README.md) |
+| The build farm's workers' | `node ci/build-farm-worker.mjs build` | `aid/build-farm-worker:<swift>-ubuntu26.04-<commit>` | [`deploy/build-farm/README.md`](../../deploy/build-farm/README.md), "Updating the image" |
+
+An image publishes on a merge that changes one of its inputs, `zuulNode` or `farmWorker` in
+[`ci/inputs.json`](../inputs.json) ([`publish/images.mjs`](publish/images.mjs)), and only while `ci/publisher` names
+Zuul. Gate checked it for the same inputs with the same command (`aid-gate-zuul-node-image`, `aid-gate-farm-worker`,
+[`gate.md`](gate.md)); `post` builds and checks it once more, as it does the apps. Two stages: `build` (the App's
+token, `contents: read`, for the push's base) builds each one's check target before the image, so an image that fails
+its check is never pushed; `push` (Zuul's token for the pusher) publishes each by its checked digest, and one that
+fails leaves the others published and fails the job. Nothing records or deploys them: the build's summary
+(`summary.md` in its logs) names each published image by tag and digest, which the admin applies as its README says.
+A separate job from the apps' so that the worker's build, a Swift toolchain downloaded and a Foundation program
+compiled, has the job's two hours of its own.
+
 ### The nightly
 
 `aid-nightly` is this repository's job ([`zuul.d/jobs.yaml`](zuul.d/jobs.yaml)), untrusted and with no secret, on the
-PR node with the farm's `dev` credential: [`publish/nightly.sh`](publish/nightly.sh) builds and tests everything with
+PR node with the farm's `dev` credential: [`publish/nightly.sh`](publish/nightly.sh) builds and tests everything (Swift and Node) with
 a BUILD file with no cached test result, on `main`'s head. Zuul's timer has no time zone, so it fires at 02:00 UTC
 (`periodic-0200`) and at 03:00 UTC (`periodic-0300`), and `ci/nightly.mjs`'s clock lets through only the one that is
 04:00 in Madrid (the owner's decision of 2026-10-20, #225), and only while `ci/publisher` names Zuul. Otherwise it
 passes having run nothing. A pipeline per time because Zuul tells a job its pipeline, not when its timer fired: an
 item that waits for the PR node past the other time keeps the decision of the timer that made it, in both jobs.
 
-That is the Bazel part of Actions' nightly. The rest of CI's jobs are check's (the Node suites, #1520) and gate's (the
+The nightly includes Swift and Node tests through Bazel. The remaining jobs are gate's (the
 images, the ingress suite and the rest, #1521, [`gate.md`](gate.md), "The gate's jobs"); the nightly does not run them
 yet.
 
@@ -85,8 +110,6 @@ one.
   `aid-release-github`, and never leaves the executor. Each stage gets a token made for it with only its permissions,
   for AIDepartment alone, revoked when the stage ends. The App needs **Contents: read and write** (it has it) and
   **Issues: read and write**, for the release's and the nightly's issues ([Turning it on](#turning-it-on), step 1).
-  The post-merge issue closer additionally needs **Pull requests: read**, accepted on the installation; its separate
-  token has Contents read, Pull requests read and Issues write ([activation](gate.md#closing-linked-issues), #1656).
 - **The pusher**: Zuul's own OIDC token, the secret `aid-pusher` (no stored value: Zuul signs a token as each stage
   starts, for three hours at most, the tenant's maximum). Only the `push` stage hands it to the script.
 
@@ -101,7 +124,7 @@ and only this token of it (`ci/publish-image.mjs` sends it as the bearer, from `
 | `aud` | `thunderbox-registry`, as GitHub's tokens have it (`CI_PUBLISH_AUDIENCE`) |
 | `sub` | `secret:aid/github.com/kristofk/aid-zuul-config/aid-pusher`: the tenant, the config project and the secret. No pull request can name that secret (Zuul: "Secrets must be defined in the same project in which they are used") |
 | `pipeline` | `post` |
-| `job-name` | `aid-publish-apps` or `aid-release` |
+| `job-name` | `aid-publish-apps`, `aid-release` or `aid-publish-images` |
 | `exp` | at most three hours after `iat` |
 
 The test bed's check 11 has Zuul 14.3.0 sign such a token in `post` and checks each claim, and its signature against
@@ -258,8 +281,19 @@ It prints nothing but zuul-admin's deprecation warning, and exits 0, once Zuul h
 `<after>` then shows in `buildsets?pipeline=post`. It runs every `post` job again for that push, not only the failed
 one: the credentials, the apps and the release. Each starts from `build`:
 
-- **An app not published** (its `push` failed): the run builds it again and publishes it. An app published and not
-  recorded is published again too, under the same version, which the pusher replaces, and recorded.
+- **An app not published** (its `push` failed): the run builds it again and publishes it. For a version already in
+  the registry, the plan prepares its declaration with that exact digest and `record` fills its missing index entry,
+  without rebuilding or replacing the tag. Every post push checks for missing current-version entries, so an unrelated
+  merge repairs earlier omissions too. A version already indexed is skipped; retrying the job creates no index
+  commit for it. If a selected payload change keeps an already indexed version, the build log and summary say
+  that publishing the payload requires a version bump. A selected version whose declaration or digest conflicts with its
+  existing index entry fails and needs a version bump. Historical versions need replay of their original source.
+- Registry lookups use anonymous HEADs against `CI_RELEASE_REGISTRY` (default `http://172.31.250.1:5002`), the host's
+  read-only registry, directly rather than through the public proxy. Only HTTP 404 means unpublished: authentication,
+  transport, timeout, server and malformed-digest errors fail the plan before any image is built or pushed.
+  Apply the merged [`post-node` policy](../../deploy/zuul/post-node/networkpolicy.yaml) through its
+  [runbook](../../deploy/zuul/post-node/README.md#applying-it) before relying on recovery. If the first post runs
+  before that rollout, its lookup fails safely; the orchestrator replays it after applying the merged policy.
 - **A release not published**: the run builds anew. Once its GitHub Release exists, the plan refuses the version, a tag
   never moving. If only the index lacks it, record its entry by hand, from the release's `aid-release.json`: `node
   ci/aid-index.mjs record aid-release.json <aid digest> <aid-broker digest> <aid-ingress digest>`, each digest the one

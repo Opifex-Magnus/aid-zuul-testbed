@@ -1,15 +1,21 @@
 """Exercise the pinned Zuul driver's real rebase merge against GitHub (#1656).
 
-Run in the scheduler image with GITHUB_TOKEN and TESTBED_REPOSITORY. This creates
-disposable issues and a pull request in a *-testbed repository. With --closer it
-runs the trusted post-merge helper after the merge, then checks its result and
-idempotence. Without it, it observes native GitHub behavior, reproducing #1656.
-The workflow supplies Issues: write, as the production aid-release token does.
+Run in the scheduler image (or an environment with Zuul 14.3.0 installed) with
+GITHUB_TOKEN and TESTBED_REPOSITORY. The token is supplied by the caller: a workflow
+token, an account token, or an installation token for this disposable repository.
+It creates fixtures and observes native closure without a helper or issue PATCH
+before the assertion. An Actions-token result does not establish another App's
+behavior; record the actual merged_by principal with the outcome.
+
+With the credential already in GITHUB_TOKEN and Zuul 14.3.0 installed, run:
+  TESTBED_REPOSITORY=owner/repository-testbed python3 -I -B ci/zuul/testbed/issue_closing.py
+The Actions token is known to fail native closure; a separately supplied account
+or installation token can test that principal. This diagnostic is not part of the
+Compose scenario and does not assert that every token type behaves alike.
 """
 
 import base64
 import os
-import argparse
 from pathlib import Path
 import runpy
 import uuid
@@ -21,7 +27,7 @@ scenario = runpy.run_path(str(Path(__file__).with_name("scenario.py")))
 GitHub, expect, wait, log = (scenario[name] for name in ("GitHub", "expect", "wait", "log"))
 
 
-def check(closer):
+def check():
     repository = os.environ["TESTBED_REPOSITORY"]
     if not repository.endswith("-testbed") or repository.count("/") != 1:
         raise ValueError("This destructive fixture runs only in an owner/*-testbed repository")
@@ -54,6 +60,21 @@ def check(closer):
         log(f"Probe: {pull['html_url']}; closes #{issues[0]}, references #{issues[1]}")
         for number in issues:
             expect(github.repo(f"/issues/{number}")["state"] == "open", f"#{number} stays open before merge")
+        owner, name = repository.split("/")
+        query = """query($owner:String!, $name:String!, $number:Int!) {
+          repository(owner:$owner, name:$name) {
+            pullRequest(number:$number) { closingIssuesReferences(first:100) { nodes { number } } }
+          }
+        }"""
+        def closing_links():
+            result = github.call("POST", "/graphql", {
+                "query": query, "variables": {"owner": owner, "name": name, "number": pull["number"]},
+            })
+            return [node["number"] for node in result["data"]["repository"]["pullRequest"]
+                    ["closingIssuesReferences"]["nodes"]]
+        links = wait("GitHub to register the closing link before merging",
+                     lambda: (links if issues[0] in (links := closing_links()) else None), 60)
+        expect(issues[1] not in links, f"closingIssuesReferences before merge: {links}")
         wait("GitHub's mergeability calculation", lambda: github.repo(f"/pulls/{pull['number']}")["mergeable"], 60)
         merged_sha = connection.mergePull(repository, pull["number"], sha=commit, method="rebase")
         merged = github.repo(f"/pulls/{pull['number']}")
@@ -61,14 +82,6 @@ def check(closer):
                f"Zuul merged by rebase as {merged['merged_by']['login']}: {merged_sha}")
         parents = github.repo(f"/commits/{merged_sha}")["parents"]
         expect([parent["sha"] for parent in parents] == [old], "rebase keeps main linear")
-        if closer:
-            trusted = runpy.run_path(closer)
-            result = trusted["close"](trusted["GitHub"](repository, token), old, merged_sha, base,
-                                      merger="github-actions[bot]")
-            log(f"Trusted post-merge closer: {result}")
-            repeated = trusted["close"](trusted["GitHub"](repository, token), old, merged_sha, base,
-                                        merger="github-actions[bot]")
-            expect(not repeated["closed"], "repeating the post-merge job closes nothing twice")
         closed = wait(f"GitHub to close #{issues[0]} after Zuul's rebase merge", lambda: next(
             (issue for issue in [github.repo(f"/issues/{issues[0]}")]
              if issue["state"] == "closed" and issue["state_reason"] == "completed"), None), 90, interval=3)
@@ -87,6 +100,4 @@ def check(closer):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--closer", help="the trusted config checkout's playbooks/issues/close.py")
-    check(parser.parse_args().closer)
+    check()

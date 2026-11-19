@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Zuul's app publishing, the job aid-publish-apps in post (ci/zuul/publish.md): on a merge into main, every application
-# whose payload the merge changed is built, checked and published; its declaration goes into the release index.
+# whose payload the merge changed is built, checked and published unless its version already exists. Missing index
+# entries for existing current versions are repaired on every push, including unrelated ones.
 #
 #   ci/zuul/publish/apps.sh build    which apps publish; each one's image built and checked, its declaration written
 #   ci/zuul/publish/apps.sh push     each built image through the pusher (Zuul's token: CI_PUBLISH_TOKEN_FILE); an
@@ -9,8 +10,8 @@
 #
 # One playbook each, so that each credential is made just before it is used, and only where: Zuul signs the pusher's
 # token as push's playbook starts, for at most three hours, and the App's tokens last an hour. What a stage decided and
-# made is kept under $ZUUL_STATE/apps/<app>/ for the next. No speculative image is reused: each image is
-# built and checked once in this job.
+# made is kept under $ZUUL_STATE/apps/<app>/ for the next. No speculative image is reused: a new image is
+# built and checked once in this job; an existing release keeps its published digest.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=ci/zuul/publish/job-env.sh
@@ -21,28 +22,32 @@ apps=$ZUUL_STATE/apps
 
 case $stage in
   build)
-    rm -rf "$apps"; mkdir -p "$apps"
+    rm -rf "$apps"
+    mkdir -p "$apps"
     trap 'node ci/image-run.mjs cleanup || true' EXIT
-    for check in apps/*/ci/check-image.sh; do
-      APP=$(basename "$(dirname "$(dirname "$check")")")
+    node ci/zuul/publish/app-plan.mjs "$apps/plan"
+    while read -r APP existing; do
       export APP
-      # Only the CI that ci/publisher names, and only an app whose payload this merge changed (ci/image-policy.mjs).
-      outputs "$apps/policy" node ci/image-policy.mjs "$APP"
-      [ "$(output "$apps/policy" publish)" = true ] || continue
       dir=$apps/$APP
       mkdir -p "$dir"
-      echo "== $APP: build, check and declare"
-      # As gate builds and checks it (ci/zuul/steps.sh), here once more on the merge.
-      app_image "$APP" "$dir"
-      IMAGE=$(output "$dir/build" image)
-      # The declaration first, pinned to the checked digest, which the pusher must return: an image is never
-      # published without one (ci/publish-image.mjs).
-      node ci/release-app.mjs "$APP" "${IMAGE##*@}"
+      if [ "$existing" = build ]; then
+        echo "== $APP: build, check and declare"
+        app_image "$APP" "$dir"
+        IMAGE=$(output "$dir/build" image)
+        echo "$IMAGE" > "$dir/image"
+        digest=${IMAGE##*@}
+      else
+        echo "== $APP: recover existing $existing without rebuilding or pushing"
+        digest=$existing
+        printf 'digest=%s\n' "$digest" > "$dir/published"
+        printf 'Recovering %s@%s in the release index.\n' "$APP" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      fi
+      # Pin the checked digest for a new image, or the release registry's digest for an existing version.
+      node ci/release-app.mjs "$APP" "$digest"
       cp released/declaration.json "$dir/declaration.json"
-      echo "$IMAGE" > "$dir/image"
       echo "$APP" >> "$apps/list"
-    done
-    [ -f "$apps/list" ] && echo "To publish: $(tr '\n' ' ' < "$apps/list")" || echo "No application's payload changed, or ci/publisher names another CI: nothing to publish."
+    done < "$apps/plan"
+    [ -f "$apps/list" ] && echo "To publish: $(tr '\n' ' ' < "$apps/list")" || echo "No new app version or missing index entry, or ci/publisher names another CI: nothing to publish."
     ;;
   push)
     : "${CI_PUBLISH_TOKEN_FILE:?push needs the pusher token}"
@@ -52,6 +57,7 @@ case $stage in
     # Each app on its own: one that fails leaves the others published, recorded next, and fails the job at the end.
     while read -r APP; do
       dir=$apps/$APP
+      [ -f "$dir/image" ] || continue # Already in the release registry: only its index entry needs repair.
       echo "== $APP: publish"
       if outputs "$dir/published" env IMAGE="$(cat "$dir/image")" VERSION="$(output "$dir/source" version)" \
         REPOSITORY="$(output "$dir/source" repository)" node ci/publish-image.mjs; then

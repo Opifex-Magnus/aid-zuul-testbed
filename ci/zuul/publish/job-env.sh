@@ -28,6 +28,8 @@ export GITHUB_REPOSITORY=kristofk/AIDepartment GITHUB_SERVER_URL=https://github.
 export GITHUB_REF=refs/heads/main GITHUB_EVENT_NAME=push GITHUB_SHA=$ZUUL_NEWREV
 # The build is the run: its UUID names the scratch images and labels the image-check pods (ci/image-run.mjs).
 export GITHUB_RUN_ID=$ZUUL_BUILD GITHUB_RUN_ATTEMPT=1 RUNNER_NAME=zuul-$ZUUL_BUILD
+# Trusted pre-run admits once; build, push, record and cleanup share this durable journal.
+export CI_SCRATCH_STATE=${CI_SCRATCH_STATE:-$ZUUL_STATE/scratch}
 export CI_RUN_URL=$ZUUL_BUILD_URL
 mkdir -p "$ZUUL_STATE/tmp" "$HOME/zuul-output/logs"
 export RUNNER_TEMP=$ZUUL_STATE/tmp TMPDIR=$ZUUL_STATE/tmp
@@ -37,6 +39,8 @@ export GITHUB_EVENT_PATH=$ZUUL_STATE/event.json
 export GITHUB_STEP_SUMMARY=$HOME/zuul-output/logs/summary.md
 # Node's fetch through the node's proxy (#208).
 export NODE_USE_ENV_PROXY=1
+# Anonymous, read-only registry on the host's cluster-facing address. app-plan bypasses the public proxy for it.
+export CI_RELEASE_REGISTRY=${CI_RELEASE_REGISTRY:-http://172.31.250.1:5002}
 # The cluster's API, for the image check's kubectl (ci/image-run.mjs) with the post node's mounted ServiceAccount. The
 # pod has these, but sshd gives a job's session only its one SetEnv line (deploy/zuul/node/image/sshd_config), so
 # kubectl found no in-cluster config and tried localhost:8080 (#1622). By name, not the pod's IP: NO_PROXY's .svc lets

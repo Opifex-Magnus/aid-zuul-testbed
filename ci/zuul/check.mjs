@@ -20,7 +20,7 @@ const LIBRARY = ["aid-bazel", "aid-script"];
 const TASK_KEYS = new Set(["name", "when", "ansible.builtin.command", "ansible.builtin.assert"]);
 const ROLE_TASK_KEYS = { "gate-plan": new Set(["name", "ansible.builtin.slurp", "register", "zuul_return"]) };
 // The gate's jobs on the image node, the staging node, and those that block nothing (gate.md, "The gate's jobs").
-const GATE_NODESETS = { "aid-gate-image": /^aid-gate-(image-|aid-images$|farm-worker$|zuul-node-image$)/, "aid-staging": /^aid-gate-staging$/ };
+const GATE_NODESETS = { "aid-gate-image": /^(aid-bazel-everything$|aid-gate-(image-|aid-images$|farm-worker$|zuul-node-image$))/, "aid-staging": /^aid-gate-staging$/ };
 const NON_VOTING = /^aid-gate-quarantine-/;
 
 const yamlFiles = (folder) => existsSync(folder)

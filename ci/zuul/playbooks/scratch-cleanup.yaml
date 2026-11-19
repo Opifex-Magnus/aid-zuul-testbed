@@ -1,0 +1,4 @@
+# Runs on failure/abort too, while Zuul still holds this image job's semaphore.
+- hosts: all
+  roles:
+    - scratch-cleanup

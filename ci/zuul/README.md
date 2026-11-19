@@ -17,9 +17,12 @@ runner retirement. After that switch, Zuul alone gates main and publishes from i
 | [`zuul.d/`](zuul.d) | the job library and AID's jobs, and which pipeline runs which | runs on the pull request itself |
 | [`playbooks/`](playbooks) | the library's playbooks and their roles | runs on the pull request itself |
 | [`testbed/`](testbed) | Zuul on both, in Docker Compose, with checks | |
+| [`disposable-nodes.md`](disposable-nodes.md) | fresh pods per job, fixed-namespace Kubernetes driver, caches and coordinated rollout (#1698) | |
 | [`gate.md`](gate.md) | how `check`, `gate` and `hold` admit, test and merge reviewed changes | |
 | [`comparison.md`](comparison.md) | historical ordinary-run comparison with the prior CI, reporting times and remaining coverage/rollout gaps (#1353) | |
 | [`publish.md`](publish.md) | `post` and the periodic pipelines: the app images, AID's release, the release index and the nightly on Zuul, which CI publishes (`ci/publisher`), and turning it on (#1350) | |
+| [`forge.md`](forge.md) | what moving from GitHub to another forge would touch, with Zuul staying, and one merge request through check and gate on GitLab (#1356) | |
+| [`testbed/gitlab/`](testbed/gitlab) | Zuul on GitLab CE, in Docker Compose: the pipelines' GitLab form and that merge request ([forge.md](forge.md), "The check on GitLab") | |
 | [`publish/`](publish) | the scripts those jobs run: aid-zuul-config's publishing jobs, and the nightly | runs on the pull request's own jobs only where one names it (`aid-nightly`); aid-zuul-config's jobs run `main`'s |
 
 ## Trusted and untrusted
@@ -49,11 +52,11 @@ The base job checks the code out; AID's jobs build and test with Bazel, or run a
 in Ansible holds build logic, so that a step runs the same outside Zuul, and Zuul could be replaced without rewriting
 the steps (#1341):
 
-- **`base`** (aid-zuul-config's `zuul.d/jobs.yaml`), every job's parent: one build node of the label `aid-node`
+- **`base`** (aid-zuul-config's `zuul.d/jobs.yaml`), every job's parent: one build node of the label `aid-check-pod-node`
   (#1345), a 2-hour timeout, and a pre-run that starts the console stream (`start-zuul-console`) and puts every project
   of the job, as Zuul prepared it, into `~/src/<host>/<owner>/<repository>` (`prepare-workspace-git`). Both roles are
   Zuul's own, from `zuul/zuul-jobs`.
-- **`aid-bazel`** ([`zuul.d/jobs.yaml`](zuul.d/jobs.yaml)), abstract: `bazel <bazel_command> <bazel_flags> --
+- **`aid-bazel`** ([`zuul.d/jobs.yaml`](zuul.d/jobs.yaml)), abstract: `bazel <bazel_startup_flags> <bazel_command> <bazel_flags> --
   <bazel_targets>` in the checkout, with the node's Bazelisk, which runs the version `.bazelversion` pins.
 - **`aid-script`**, abstract: `./<script> <script_args>` in the checkout, where `script` is a path under `ci/` or
   `scripts/`. The role refuses any other.
@@ -66,14 +69,32 @@ the steps (#1341):
   since each of those jobs holds a secret ([publish.md](publish.md)). The [comparison](comparison.md) records the
   cheap and gate coverage gaps of 2026-11-15, which #1520 (check's) and #1521 (gate's, these jobs) close.
 
+Check and gate's non-image jobs share two disposable `aid-check-pod-node` slots in `zuul-nodes`.
+The namespace quota and the trusted `aid-k3s-check-pods` provider's `resource-limits: {pods: 2}`
+must agree. The orchestrator updates that private provider after the quota change merges and the
+farm ramp (#1861) is applied. Gate image and post providers retain one slot each.
+
+## Executor resources
+
+Set CPU and memory on each executor's pod/nodeset, in `deploy/zuul/` and the trusted
+`aid-zuul-config` provider definitions. Build scripts carry no node-specific jobs budget (#1695).
+Bazel's `HOST_CPUS` and `HOST_RAM` honour the node's cgroup, including for local work on a remote
+build; the farm retains its own 200-job queue and worker slot limits. The release folder's clean
+local build reads the post, image or staging node's `cpu.max` and `memory.max`, using the same
+67% RAM fraction as Bazel. See [Build resource limits](../../docs/development.md#build-resource-limits).
+
 ## The cheap checks
 
 `aid-cheap-checks` calls [`cheap.mjs`](cheap.mjs) with `zuul.branch`, beside the four lint jobs in both `check` and
-`check-external`. It first runs Actions' repository commands, in order:
+`check-external`. It first runs:
 
-- `node ci/quarantine.mjs check`
-- `node ci/quarantine.mjs node-test --import ./ci/test-progress.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./ci/test-file-failures.mjs --test-reporter-destination=stdout -- ci/*.test.mjs`
-- `node ci/quarantine.mjs node-test -- scripts/capture-github-legacy.test.mjs`
+```sh
+bazel test --config=ci --config=zuul -- //:node_quarantine_check //:node_ci //:node_legacy
+```
+
+These are Bazel test actions on the farm, with the pinned Node runtime and the existing quarantine wrapper.
+The expiry check is uncached because its answer depends on today's date. CI test files have individual targets
+`//:node_ci_<file stem>`; `//:node_ci` groups all of them.
 
 A failed command fails the voting job before suites run. Then `ci/affected.mjs` plans the difference between
 `refs/remotes/origin/<target-branch>` and `HEAD`. Zuul preserves that remote ref as the state before the queue item's
@@ -81,26 +102,19 @@ speculative merge ([Zuul's Git repositories](https://zuul-ci.org/docs/zuul/lates
 it covers every commit of a rebased pull request without fetching a newer base. If the diff cannot be read, every
 Node suite runs. Unknown paths use the planner's existing full fallback.
 
-Only the plan's Node suites run, from [`../node-suites.json`](../node-suites.json), the commands shared with `ci/local-tests.mjs` and the
-Actions cutover (#1608). This registry preserves the application extraction, adapter tests and application CI tests,
-mock AID, lab and page script commands. The quarantine wrapper skips quarantined tests in the blocking runs; expired
-or invalid entries fail the initial check. A selected suite with no command fails the job. Suites run sequentially,
-with shell error propagation within each and a result for later suites even if an earlier one fails. Any failure
-fails `aid/check`; no cached or skipped policy result substitutes for success.
+Only the plan's Node suites run, as `bazel test --config=ci --config=zuul -- //:node_<suite> ...`.
+The commands inside those actions come from [`../node-suites.json`](../node-suites.json), shared with the local
+helper. Each adapter target preserves its extraction, adapter tests and CI tests. Mock AID, lab and page script
+have targets too. An unknown suite fails closed; any failing target fails `aid/check`.
 
-The job node needs Node, Python, git, `cc` with libc headers (the root guard's private Linux fixtures), and `readelf`
-(the node-image checks). `deploy/zuul/node/image/` installs and checks them as the job user. The first ordinary run of
-this job on #1644, build `8bbcbf6cacc84c59ad346e58179f59f9`, failed closed because the deployed older image had neither
-`cc` nor `readelf`: its CI policy tests failed and suites did not run. The checked image containing these prerequisites
-must be published and rolled out through the existing node-image process before production check can pass. This
-change does not roll out a node or release the held cutover.
-
-The runner reads no workflow YAML for execution. While Actions remains, `ci/zuul-cheap.test.mjs` checks command
-parity against `ci.yml`, and exercises selection and failures in scratch repositories. No extra measurement run is
-needed. The Compose testbed keeps its script stand-ins and includes the new job in its scheduling assertions.
-
-The trust boundary stays in the existing trusted base: it rejects `check-external` before any untrusted hook until
-credential-free nodes exist. Adding this script job does not enable external execution or change node credentials.
+Bazel owns test caching. A second unchanged run reuses Node results, except the date-sensitive quarantine check.
+Tests run from writable declared-input copies on the farm, with a private HOME and pinned Node on PATH.
+`requires-loopback` targets need the farm workers' ephemeral loopback listeners. Their shell/git/Python/OpenSSL/C
+fixtures use the workers' platform userland; no suite needs a live network service or Docker daemon.
+Gate's `aid-bazel-everything` and the nightly include these targets through `//...`; the nightly disables test caching.
+`aid-gate-quarantine-node` runs the manual, uncached `//:node_quarantine` action and copies its report from Bazel outputs.
+No Node test executes on the PR node or builder box. The script/testbed checks exercise selection and error propagation
+with fake Bazel commands; they never start another farm build from inside a test action.
 
 ## Adding or changing a job
 
@@ -112,8 +126,9 @@ An ordinary pull request here, tested by Zuul on itself:
 2. List it under the pipelines that should run it, in [`zuul.d/project.yaml`](zuul.d/project.yaml): `check` for every
    pull request, `gate` for what must pass before a merge.
 3. Open the pull request. Zuul's `check` runs the new job on it, as the pull request defines it. A mistake in the
-   configuration fails `check` with Zuul's error on the pull request. Fix it and push, or comment `recheck` to run it
-   again.
+   configuration fails `check` with Zuul's error on the pull request. Fix it and push. For an unrelated failure on
+   an unchanged, reviewed head, record the failure and use the authenticated
+   [same-head check recovery](../../deploy/zuul/web.md#recovering-check-on-the-same-head); `recheck` is ignored.
 
 A new playbook or role goes under [`playbooks/`](playbooks), and is tested the same way. Keep it to calling Bazel or a
 script: a new kind of step is a script.
@@ -270,25 +285,6 @@ The scenario plays the GitHub side of both bots on it: check on the draft; ready
 of which lets it in; the reviewer's approval of a held head, then the builder's push after it, which GitHub answers by
 dismissing that approval; the reviewer's approval of the new head, which lets it in. Zuul merges it by rebase, and the
 issue closes. Sync without `TESTBED_LOOP` before the next run of checks 1 to 12.
-
-The loop now runs the config checkout's trusted issue closer after the rebase, before observing issue closure;
-it no longer PATCHes an issue merely to make the assertion pass (#1656). The focused probe runs just the pinned
-driver's real rebase merge and the same closer, checks a closing keyword against an ordinary reference, and repeats
-the closer to prove idempotence. Sync both copies from the proposed branches first, then:
-
-```sh
-gh workflow run testbed.yml --repo <you>/aid-zuul-testbed -f issue_closing_only=true
-```
-
-The same run first executes the config checkout's `tests/check_issue_queue.py` in the pinned scheduler image,
-without network access. It reproduces `post` discarding merge B when B and C queue behind active A, then runs the
-production closer for each surviving push. The configured independent `post-issues` pipeline retains both merges
-and closes both issues. Queue storage is a stand-in; allocation and pruning use the installed Zuul manager methods.
-
-This exercises the merge and closure APIs with the workflow's own token. It does not prove the production App's
-accepted grant or activation; [gate.md](gate.md#closing-linked-issues) records those separately. Running
-`testbed/issue_closing.py` in the scheduler image without `--closer` observes GitHub alone and reproduces the original
-failure without manually closing the issue before the assertion.
 
 ## On ThunderBox
 

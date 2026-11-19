@@ -1,0 +1,139 @@
+# The forge's half of aid-zuul-config's pipelines, on GitLab (../../forge.md, "Triggers and reporters"). translate.py
+# takes the pipelines of aid-zuul-config's checkout and swaps, in each section of each pipeline, its github entry for
+# this file's gitlab entry of the same pipeline and section. Everything else is the original's: the manager, the
+# window, supercedes, post-review, the aid-events reporters and the timer pipelines. So this file holds only what is
+# GitHub's in the original, and how GitLab does it with Zuul 14.3.0's GitLab driver:
+#
+# - No permission filter: GitLab's trigger has none. Who may open a merge request, comment or label is GitLab's
+#   project membership.
+# - No commit status or check run: GitLab's reporter can comment, approve, label and merge. check's result is the
+#   label check-passed, which gate requires: check takes it off when it starts and puts it on when it passes.
+# - No draft: GitLab's driver drops the event of a draft marked ready, and cannot require "not a draft". Ready is the
+#   label ready, which the builder adds once the head is approved, and takes off to turn it back.
+# - approved means GitLab's own "approved" of the merge request, whoever approved it (GitLab Free has no approval
+#   rules), not a review by an account with write access.
+# A gitlab reporter comments unless told not to (comment: true is the driver's default).
+
+- pipeline:
+    name: check
+    trigger:
+      gitlab:
+        - event: gl_merge_request
+          action: [opened, changed]
+    start:
+      gitlab:
+        comment: false
+        unlabel: check-passed
+    success:
+      gitlab:
+        comment: true
+        label: check-passed
+    failure:
+      gitlab:
+        comment: true
+        unlabel: check-passed
+    dequeue:
+      gitlab:
+        comment: false
+        unlabel: check-passed
+    merge-conflict:
+      gitlab:
+        comment: true
+        unlabel: check-passed
+    config-error:
+      gitlab:
+        comment: true
+        unlabel: check-passed
+
+- pipeline:
+    name: check-external
+    trigger:
+      gitlab:
+        - event: gl_merge_request
+          action: comment
+          comment: (?i)^\s*check-external\s*$
+    start:
+      gitlab:
+        comment: false
+    success:
+      gitlab:
+        comment: true
+    failure:
+      gitlab:
+        comment: true
+    dequeue:
+      gitlab:
+        comment: false
+    merge-conflict:
+      gitlab:
+        comment: true
+    config-error:
+      gitlab:
+        comment: true
+
+- pipeline:
+    name: gate
+    require:
+      gitlab:
+        open: true
+        approved: true
+        labels: [check-passed, ready]
+    reject:
+      gitlab:
+        labels: [hold]
+    trigger:
+      gitlab:
+        # Approved, once ready and checked.
+        - event: gl_merge_request
+          action: approved
+        # Ready, or check passed on the head (check's success reporter adds the label), or hold taken off.
+        - event: gl_merge_request
+          action: labeled
+          labels: [ready, check-passed]
+        - event: gl_merge_request
+          action: labeled
+          unlabels: [hold]
+        - event: gl_merge_request
+          action: comment
+          comment: (?i)^\s*regate\s*$
+    enqueue:
+      gitlab:
+        comment: false
+    start:
+      gitlab:
+        comment: false
+    success:
+      gitlab:
+        comment: false
+        merge: true
+    failure:
+      gitlab:
+        comment: true
+    dequeue:
+      gitlab:
+        comment: false
+    merge-conflict:
+      gitlab:
+        comment: true
+    config-error:
+      gitlab:
+        comment: true
+
+- pipeline:
+    name: hold
+    trigger:
+      gitlab:
+        - event: gl_merge_request
+          action: labeled
+          labels: [hold]
+        # Turned back: ready taken off, as GitHub's converted_to_draft.
+        - event: gl_merge_request
+          action: labeled
+          unlabels: [ready]
+
+- pipeline:
+    name: post
+    trigger:
+      gitlab:
+        - event: gl_push
+          ref: ^refs/heads/main$

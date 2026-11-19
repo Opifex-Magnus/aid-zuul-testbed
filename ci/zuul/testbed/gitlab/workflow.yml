@@ -1,0 +1,28 @@
+# The GitLab test bed's workflow (../../forge.md, "The check on GitLab"). sync.sh copies it into the test bed's
+# repository as .github/workflows/gitlab.yml; it runs only when dispatched: gh workflow run gitlab.yml --repo <owner>/<name>.
+# GitHub's runner is only the machine: the forge under test is the GitLab CE that run.sh starts on it.
+name: Zuul on GitLab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gitlab-testbed
+  cancel-in-progress: false
+jobs:
+  gitlab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: A merge request through Zuul's check and gate on GitLab
+        run: ci/zuul/testbed/gitlab/run.sh
+        env:
+          TESTBED_RESULTS: ${{ runner.temp }}/gitlab-results.json
+      - name: The results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitlab-results
+          path: ${{ runner.temp }}/gitlab-results.json
+          if-no-files-found: ignore

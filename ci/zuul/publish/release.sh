@@ -23,7 +23,7 @@ released=$state/released
 
 case $stage in
   build)
-    rm -rf "$state"; mkdir -p "$released"
+    mkdir -p "$released"
     outputs "$state/plan" node ci/aid-release.mjs plan
     # A plan that ran to its end, so report knows a failure after it from a refusal by it (which writes no plan).
     touch "$state/planned"
@@ -33,7 +33,7 @@ case $stage in
     node ci/aid-release.mjs unreleased
     trap 'node ci/image-run.mjs cleanup || true' EXIT
     # Clean: no cache, no farm (deploy/release-folder.sh). Every release carries the keychain asset from it.
-    deploy/release-folder.sh --jobs "${RELEASE_JOBS:-3}"
+    deploy/release-folder.sh
     node ci/aid-release.mjs keychain dist/keychain/aid-keychain "$released"
     # As gate builds and checks them (ci/zuul/steps.sh).
     aid_images "$state" "$released/checks.txt"

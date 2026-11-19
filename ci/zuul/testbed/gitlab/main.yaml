@@ -1,0 +1,25 @@
+# The GitLab test bed's tenant (../../forge.md, "The check on GitLab"): ThunderBox's (deploy/zuul/server/config/main.yaml)
+# with gitlab in place of github, and the GitHub test bed's config-project exclusions (../main.yaml). The projects are
+# GitLab's paths, group/project, which setup.py makes.
+- tenant:
+    name: aid
+    source:
+      gitlab:
+        config-projects:
+          - aid/aid-zuul-config:
+              load-branch: main
+              # Its own stanza runs only noop in check; left out as in the GitHub test bed.
+              exclude:
+                - project
+              extra-config-paths:
+                - testbed/
+        untrusted-projects:
+          - aid/aidepartment:
+              extra-config-paths:
+                - ci/zuul/zuul.d/
+              exclude-unprotected-branches: true
+      opendev.org:
+        untrusted-projects:
+          - zuul/zuul-jobs:
+              include:
+                - job

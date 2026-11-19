@@ -31,7 +31,7 @@ testbed_repository=$(repository_of "$dest")
 
 find "$dest" "$config_dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 (cd "$config" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} "$config_dest/" \;)
-# Compose's node replaces the production k3s provider for the same aid-node label. Keep the
+# Compose's node replaces the production k3s provider for the same aid-check-pod-node label. Keep the
 # production base job and playbooks; its real provider is tested on k3s, not Compose. The pipeline
 # changes for the workflow's token are below.
 rm -f "$config_dest/zuul.d/providers.yaml"
@@ -50,8 +50,9 @@ done < <(grep -rlE '^- secret:|^ +secrets:' "$config_dest/zuul.d" || true)
 # error in its summary; a status cannot, so each failure reporter comments too, as main's did before check runs, and
 # the scenario's negative cases read the error from that comment. gate's requirement and trigger on check's check run
 # become the same on check's status, which GitHub shows as made by github-actions[bot] (its REST API) or
-# github-actions (its GraphQL API, which Zuul reads the requirement from). aid-zuul-config's own files keep check runs
-# and the permission (AIDepartment's deploy/zuul/github.md); every change must apply, or the copy stops.
+# github-actions (its GraphQL API, which Zuul reads the requirement from). A status has no cancelled or skipped, so
+# dequeue and no-jobs leave it as it was (#1660). aid-zuul-config's own files keep check runs and the permission
+# (AIDepartment's deploy/zuul/github.md); every change must apply, or the copy stops.
 pipelines="$config_dest/zuul.d/pipelines.yaml"
 # Keep the original before removing permissions for the workflow token. run.sh
 # checks its schema and gate's review filters with the pinned scheduler's driver.
@@ -66,7 +67,7 @@ TESTBED_CHECK_STATUS="'github-actions(\\[bot\\])?:aid/check:success'" awk '
   /^ +check: (in_progress|queued)$/ { sub(/check: .*/, "status: pending"); print; next }
   /^ +check: success$/ { sub(/check: success/, "status: success"); print; next }
   /^ +check: failure$/ { sub(/check: failure/, "status: failure"); print; failed = 1; next }
-  /^ +check: cancelled$/ || /^ +permission: write$/ { next }
+  /^ +check: (cancelled|skipped)$/ || /^ +permission: write$/ { next }
   failed && /^ +comment: false$/ { sub(/false/, "true") }
   /^ +comment: / { failed = 0 }
   { print }
@@ -103,6 +104,8 @@ mkdir -p "$dest/ci" "$dest/deploy/zuul/server/config" "$dest/deploy/zuul/executo
 cp -R "$root/ci/zuul" "$dest/ci/zuul"
 mv "$pipelines.original" "$dest/ci/zuul/testbed/original-pipelines.yaml"
 cp "$root/deploy/zuul/server/config/zuul.conf" "$dest/deploy/zuul/server/config/"
+mkdir -p "$dest/deploy/zuul/server/launcher"
+cp "$root/deploy/zuul/server/launcher/"*.py "$dest/deploy/zuul/server/launcher/"
 cp "$root/deploy/zuul/server/zoo.cfg" "$dest/deploy/zuul/server/"
 cp "$root/deploy/zuul/secrets.sh" "$dest/deploy/zuul/"
 cp "$root/deploy/zuul/executor/store-logs.sh" "$dest/deploy/zuul/executor/"
@@ -181,6 +184,12 @@ pinned() { # pinned <manifest>: its one image
 {
   echo "# The config project's copy, and the images ThunderBox runs, from deploy/zuul/ (sync.sh)."
   echo "TESTBED_CONFIG_REPOSITORY=$config_repository"
+  # A broker connection alone does not mean the trusted pipelines report to it (#1526).
+  if grep -qE '^ +aid-events:' "$pipelines"; then
+    echo "TESTBED_REPORTS=1"
+  else
+    echo "TESTBED_REPORTS=0"
+  fi
   echo "ZUUL_SCHEDULER_IMAGE=$(zuul_image scheduler)"
   echo "ZUUL_WEB_IMAGE=$(zuul_image web)"
   echo "ZUUL_LAUNCHER_IMAGE=$(zuul_image launcher)"

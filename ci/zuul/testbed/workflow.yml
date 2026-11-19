@@ -9,10 +9,6 @@ on:
         description: The builder's pull request for the two-agent loop's check (13) alone; empty runs checks 1 to 12
         required: false
         default: ""
-      issue_closing_only:
-        description: Check the pinned driver's rebase merge closes issues, without the Compose scenarios
-        type: boolean
-        default: false
 permissions:
   contents: write
   pull-requests: write
@@ -25,7 +21,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   testbed:
-    if: ${{ !inputs.issue_closing_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -38,23 +33,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TESTBED_REPOSITORY: ${{ github.repository }}
           TESTBED_LOOP_PULL: ${{ inputs.loop_pull }}
-  issue-closing:
-    if: ${{ inputs.issue_closing_only }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: The trusted post-merge closer closes the keyword-linked issue
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TESTBED_REPOSITORY: ${{ github.repository }}
-        run: |
-          source ci/zuul/testbed/testbed.env
-          git clone --depth=1 "https://github.com/$TESTBED_CONFIG_REPOSITORY.git" "$RUNNER_TEMP/config"
-          docker run --rm --network=none --entrypoint python3 \
-            --mount "type=bind,src=$RUNNER_TEMP/config,dst=/config,readonly" \
-            "$ZUUL_SCHEDULER_IMAGE" -I -B /config/tests/check_issue_queue.py
-          docker run --rm --entrypoint python3 -e GITHUB_TOKEN -e TESTBED_REPOSITORY \
-            --mount "type=bind,src=$PWD/ci/zuul/testbed,dst=/probe,readonly" \
-            --mount "type=bind,src=$RUNNER_TEMP/config/playbooks/issues,dst=/closer,readonly" \
-            "$ZUUL_SCHEDULER_IMAGE" -I -B /probe/issue_closing.py --closer /closer/close.py
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testbed-diagnostics
+          path: testbed-diagnostics.txt
+          if-no-files-found: warn

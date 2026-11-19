@@ -9,14 +9,14 @@
     name: testbed
 
 - label:
-    name: aid-node
+    name: aid-check-pod-node
     image: testbed-node
     flavor: testbed
 
 # The labels of the gate's image and staging nodes (ci/zuul/zuul.d/jobs.yaml's nodesets aid-gate-image and aid-staging),
 # with no node: the plan's stand-in names none of their jobs (sync.sh), so Zuul skips them and asks for no such node.
 - label:
-    name: aid-gate-node
+    name: aid-gate-pod-node
     image: testbed-node
     flavor: testbed
 
@@ -37,13 +37,13 @@
     # Two, compose.yaml's node and node-2: gate's window runs two pull requests' jobs at once.
     nodes:
       - name: node
-        label: aid-node
+        label: aid-check-pod-node
         connection-port: 22
       - name: node-2
-        label: aid-node
+        label: aid-check-pod-node
         connection-port: 22
     labels:
-      - name: aid-node
+      - name: aid-check-pod-node
     images:
       - name: testbed-node
         python-path: /usr/bin/python3

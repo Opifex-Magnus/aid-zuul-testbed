@@ -1,0 +1,143 @@
+# The GitLab test bed (../../forge.md, "The check on GitLab"), in Docker Compose, started by run.sh in a copy that
+# sync.sh made: GitLab CE as the forge, and Zuul with ThunderBox's images, ZooKeeper configuration and zuul.conf, as in
+# the GitHub test bed (../compose.yaml), with a GitLab connection in place of the GitHub one. Everything it holds lives
+# as long as the run: run.sh makes the keys and passwords, in $TESTBED_WORK.
+name: zuul-gitlab-testbed
+
+x-zuul: &zuul
+  restart: on-failure
+  depends_on:
+    zookeeper: {condition: service_healthy}
+    db: {condition: service_healthy}
+  environment: &zuul-env
+    ZUUL_KEYSTORE_PASSWORD: ${ZUUL_KEYSTORE_PASSWORD:?}
+    ZUUL_DB_PASSWORD: ${ZUUL_DB_PASSWORD:?}
+    ZUUL_GITLAB_TOKEN: ${ZUUL_GITLAB_TOKEN:-}
+    ZUUL_WEBHOOK_TOKEN: ${ZUUL_WEBHOOK_TOKEN:?}
+    ZUUL_WEB_ROOT: http://127.0.0.1:9000/
+  volumes:
+    - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
+    - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+
+services:
+  gitlab:
+    # GitLab's Community Edition, the free self-hosted one (19.5.5, the newest on 2026-11-15).
+    image: gitlab/gitlab-ce:19.5.5-ce.0@sha256:392e6bd5bf118ae520e4038261a5ae39aea05de0d2299a162b4c822a9684cf9b
+    hostname: gitlab
+    environment:
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD:?}
+      # Only what the test needs: the web, the API, Git over HTTP and the webhooks' Sidekiq.
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab'
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 5
+        prometheus_monitoring['enable'] = false
+        gitlab_kas['enable'] = false
+        registry['enable'] = false
+        gitlab_rails['usage_ping_enabled'] = false
+        gitlab_rails['auto_migrate'] = true
+    ports: ["127.0.0.1:8080:80"]
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/-/readiness?all=1"]
+      start_period: 900s
+      start_interval: 10s
+      interval: 300s
+    networks: [zuul]
+
+  events:
+    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+    volumes:
+      - ../mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks: [zuul]
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-t", "health", "-m", "ready"]
+      interval: 1s
+      retries: 30
+
+  zookeeper:
+    image: ${ZOOKEEPER_IMAGE:?}
+    environment:
+      ZK_SERVER_HEAP: "256"
+    volumes:
+      - ../../../../deploy/zuul/server/zoo.cfg:/conf/zoo.cfg:ro
+      - ${TESTBED_WORK:?}/zookeeper-tls:/tls:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/2281"]
+      start_period: 120s
+      start_interval: 2s
+      interval: 300s
+    networks:
+      zuul:
+        aliases: [zookeeper.zuul.svc.cluster.local]
+
+  db:
+    image: ${MARIADB_IMAGE:?}
+    environment:
+      MARIADB_DATABASE: zuul
+      MARIADB_USER: zuul
+      MARIADB_PASSWORD: ${ZUUL_DB_PASSWORD:?}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 120s
+      start_interval: 2s
+      interval: 300s
+    networks:
+      zuul:
+        aliases: [db.zuul.svc.cluster.local]
+
+  scheduler:
+    <<: *zuul
+    image: ${ZUUL_SCHEDULER_IMAGE:?}
+    command: ["zuul-scheduler", "-f"]
+    networks: [zuul]
+
+  web:
+    <<: *zuul
+    image: ${ZUUL_WEB_IMAGE:?}
+    command: ["zuul-web", "-f"]
+    environment:
+      <<: *zuul-env
+      # The admin API's signing secret ([auth admin], deploy/zuul/web.md), web's alone as in ../compose.yaml.
+      ZUUL_ADMIN_SECRET: ${ZUUL_ADMIN_SECRET:?}
+    ports: ["127.0.0.1:9000:9000"]
+    networks:
+      zuul:
+        aliases: [web.zuul.svc.cluster.local]
+
+  launcher:
+    <<: *zuul
+    image: ${ZUUL_LAUNCHER_IMAGE:?}
+    command: ["zuul-launcher", "-f"]
+    networks: [zuul]
+
+  executor:
+    <<: *zuul
+    image: ${ZUUL_EXECUTOR_IMAGE:?}
+    command: ["zuul-executor", "-f", "--keep-jobdir"]
+    privileged: true
+    environment:
+      <<: *zuul-env
+      ZUUL_EXECUTOR_HOSTNAME: executor
+    volumes:
+      - ${TESTBED_WORK:?}/etc:/etc/zuul:ro
+      - ${TESTBED_WORK:?}/client-tls:/etc/zuul-tls:ro
+      - ${TESTBED_WORK:?}/ssh:/root/.ssh:ro
+      - ${TESTBED_WORK:?}/logs:/srv/zuul-logs
+      - ../../../../deploy/zuul/executor:/etc/zuul-executor:ro
+    networks: [zuul]
+
+  # The GitHub test bed's build nodes (../node), both of them: its providers.yaml, in the config copy, names two.
+  node: &node
+    build: ../node
+    image: zuul-testbed-node
+    volumes:
+      - ${TESTBED_WORK:?}/ssh/id_rsa.pub:/home/zuul/.ssh/authorized_keys:ro
+    networks: [zuul]
+
+  node-2:
+    <<: *node
+
+networks:
+  zuul: {}

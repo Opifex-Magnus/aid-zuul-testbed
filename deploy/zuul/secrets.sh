@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # secrets.sh: Zuul's Secrets (README.md, "Secrets"), printed as JSON for `kubectl apply -f -`.
-# Nothing is written to disk but the CA, and only by `ca`.
+# Recovery uses age ciphertext and the owner's 1Password identity, without AID.
+#
+#   deploy/zuul/secrets.sh restore [NAME] --secrets-dir DIR --identity FILE
+#       decrypts NAME.age (default zuul-bootstrap-secrets) and prints a Kubernetes Secret List.
+#       Preserves the saved values and namespaces; never generates replacements or applies anything.
+#   deploy/zuul/secrets.sh decrypt NAME --secrets-dir DIR --identity FILE
+#       decrypts an individual backup, byte for byte, to stdout for its intended consumer.
+#       Both commands authenticate the complete ciphertext before emitting anything. Plaintext scratch
+#       is private, RAM-backed /dev/shm, removed on exit. Pipe stdout directly to the consumer, never a log.
 #
 #   deploy/zuul/secrets.sh ca DIR
 #       makes ZooKeeper's CA: DIR/ca.key (mode 600) and DIR/ca.crt, in a new directory DIR. Move the
@@ -52,6 +60,8 @@ app_id=""
 app_key=""
 webhook_token=""
 root=""
+secrets_dir=""
+identity=""
 args=()
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
@@ -65,6 +75,8 @@ while [ $# -gt 0 ]; do
     --app-key) app_key=${2:?--app-key needs a value}; shift 2 ;;
     --webhook-token) webhook_token=${2:?--webhook-token needs a value}; shift 2 ;;
     --root) root=${2:?--root needs a value}; shift 2 ;;
+    --secrets-dir) secrets_dir=${2:?--secrets-dir needs a value}; shift 2 ;;
+    --identity) identity=${2:?--identity needs a value}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     *) args+=("$1"); shift ;;
@@ -77,7 +89,14 @@ if [ -n "$days" ]; then
   [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] || { echo "--days must be a positive number" >&2; exit 2; }
 fi
 
-tmp=$(mktemp -d)
+umask 077
+if [ "$command" = restore ] || [ "$command" = decrypt ]; then
+  # Recovery must never spill plaintext to a disk-backed TMPDIR.
+  [ -d /dev/shm ] && [ -w /dev/shm ] || { echo "recovery needs writable /dev/shm" >&2; exit 1; }
+  tmp=$(mktemp -d /dev/shm/ci-secrets.XXXXXXXX)
+else
+  tmp=$(mktemp -d)
+fi
 trap 'rm -rf "$tmp"' EXIT
 
 # secret <name> <type> <key=file>...: a Secret as JSON, each key's value the file's contents.
@@ -152,6 +171,49 @@ client_secrets() {
 }
 
 case "$command" in
+  restore|decrypt)
+    [ -n "$secrets_dir" ] && [ -n "$identity" ] \
+      || { echo "$command needs --secrets-dir and --identity" >&2; exit 2; }
+    if [ "$command" = restore ] && [ "${#args[@]}" -eq 0 ]; then args=(zuul-bootstrap-secrets); fi
+    [ "${#args[@]}" -eq 1 ] || { usage >&2; exit 2; }
+    name=${args[0]}
+    [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "invalid backup name" >&2; exit 2; }
+    command -v age >/dev/null || { echo "recovery needs age on PATH" >&2; exit 1; }
+    # age can write plaintext before detecting a damaged final chunk. Buffer until it succeeds.
+    age --decrypt --identity "$identity" "$secrets_dir/$name.age" > "$tmp/plain" 2>/dev/null \
+      || { echo "cannot decrypt $name.age (missing file, wrong identity or damaged ciphertext)" >&2; exit 1; }
+    [ -s "$tmp/plain" ] || { echo "empty backup: $name.age" >&2; exit 1; }
+    if [ "$command" = decrypt ]; then
+      cat "$tmp/plain"
+    else
+      # Rebuild manifests, not live object metadata (UIDs, resourceVersions, owner references or
+      # kubectl's last-applied annotation). A malformed/foreign object aborts the entire restore.
+      jq -es '
+        def valid:
+          . as $s |
+          .apiVersion == "v1" and .kind == "Secret" and
+          (["zuul","zuul-executor","zuul-nodes","zuul-gate","zuul-post","build-farm"] | index($s.metadata.namespace)) != null and
+          (.metadata.name | type == "string" and test("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")) and
+          (.type == "Opaque" or .type == "kubernetes.io/tls") and
+          (.data | type == "object" and length > 0 and all(.[]; type == "string" and test("^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")));
+        if length != 1 then error("expected one document") else .[0] end |
+        (if .apiVersion == "v1" and (.kind == "List" or .kind == "SecretList") then .items
+         elif .kind == "Secret" then [.] else error("expected Secrets") end) |
+        if type != "array" or length == 0 then error("empty backup") else . end |
+        # Kubernetes defaults an omitted, null or empty Secret type to Opaque. The node
+        # generators save that pre-admission format directly into the keychain.
+        map(if .type == null or .type == "" then .type = "Opaque" else . end) |
+        if all(.[]; valid) and
+           (map([.metadata.namespace,.metadata.name]) | length == (unique | length))
+        then {apiVersion:"v1",kind:"List",items:map({apiVersion,kind,type,data,
+          metadata:{name:.metadata.name,namespace:.metadata.namespace}})}
+        else error("invalid Secrets") end
+      ' "$tmp/plain" > "$tmp/manifests" 2>/dev/null \
+        || { echo "invalid CI Secret backup: $name.age" >&2; exit 1; }
+      cat "$tmp/manifests"
+    fi
+    ;;
+
   ca)
     [ "${#args[@]}" -eq 1 ] || { usage >&2; exit 2; }
     dir=${args[0]}

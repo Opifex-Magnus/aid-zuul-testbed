@@ -1,0 +1,4 @@
+- name: Delete this attempt's scratch manifests after fencing its writers and consumers
+  ansible.builtin.command:
+    argv: [./ci/zuul/scratch-cleanup.sh, "{{ zuul.build }}"]
+    chdir: "{{ zuul.project.src_dir }}"

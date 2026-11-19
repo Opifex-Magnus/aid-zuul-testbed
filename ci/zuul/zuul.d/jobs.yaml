@@ -10,10 +10,11 @@
     name: aid-bazel
     abstract: true
     description: |
-      Runs one Bazel command in the checkout: `bazel <bazel_command> <bazel_flags> -- <bazel_targets>`.
+      Runs one Bazel command in the checkout: `bazel <bazel_startup_flags> <bazel_command> <bazel_flags> -- <bazel_targets>`.
     run: ci/zuul/playbooks/bazel.yaml
     vars:
       bazel_command: test
+      bazel_startup_flags: []
       bazel_flags: []
       bazel_targets: ["//..."]
 
@@ -68,8 +69,8 @@
     name: aid-cheap-checks
     parent: aid-script
     description: |
-      Quarantine validation, CI/workflow policy, legacy capture, and the affected Node suites, with Actions' commands
-      and quarantine behavior. A failure of any check or selected suite fails aid/check (#1520).
+      Quarantine validation, CI/workflow policy, legacy capture, and affected Node suites through Bazel on the farm,
+      with a pinned Node runtime, extraction, quarantine behavior and Bazel test caching. A failure of any check or selected suite fails aid/check (#1520).
     timeout: 1800
     vars:
       script: ci/zuul/cheap.mjs
@@ -78,16 +79,37 @@
 - job:
     name: aid-bazel-everything
     parent: aid-bazel
+    # The 3 GiB heap below requires the existing 6 GiB node (#1842, also selected by #1701).
+    nodeset: aid-gate-image
     description: |
       Builds and tests everything with a BUILD file, as CI's `bazel` job does in the merge queue's run, within the
       base job's 2-hour timeout (ci/zuul/gate.md, "Timeouts"), when the gate's plan names it.
     dependencies: [aid-gate-plan]
     vars:
       bazel_command: test
+      # #1842: the full OCI graph needs more than the default 25% heap.
+      # The selected gate-image node leaves 3 GiB outside heap; no pod budget change.
+      bazel_startup_flags: ["--host_jvm_args=-Xmx3g"]
       # On the build farm, from a node with no compiler (#1345): .bazelrc's `zuul`, the farm by the cluster's address,
       # the workers' installed toolchains and no local fallback, under `dev`; main gets its own nodes (#1351).
-      bazel_flags: [--config=ci, --config=zuul]
+      # Keep pre-breaker RPC errors and the selected targets' actual outcomes with the job logs (#1719).
+      # These files are on the node, where the trusted base job's post-run fetches zuul-output/logs
+      # even after the Bazel command fails. No credential-helper output or HTTP headers are logged.
+      bazel_flags:
+        - --config=ci
+        - --config=zuul
+        - "--remote_grpc_log={{ ansible_user_dir }}/zuul-output/logs/remote-rpc.pb"
+        - "--execution_log_json_file={{ ansible_user_dir }}/zuul-output/logs/execution.json"
+        - "--build_event_json_file={{ ansible_user_dir }}/zuul-output/logs/build-events.jsonl"
+        # Keep BEP emission independent of an unavailable remote uploader.
+        - --nobuild_event_json_file_path_conversion
       bazel_targets: ["//..."]
+
+# One tenant-wide slot for complete scratch producer/consumer lifetimes and maintenance.
+# Trusted post/maintenance jobs must use this same name; see ../scratch-retention.md.
+- semaphore:
+    name: aid-scratch-registry
+    max: 1
 
 # The gate (#1521, gate.md, "The gate's jobs"): CI's queue layer, each of its steps a job, with ci/zuul/gate.sh running
 # the step's commands. aid-gate-plan plans the change as ci.yml's plan job does (ci/zuul/gate.mjs), and every other job
@@ -103,12 +125,16 @@
       script: ci/zuul/gate.sh
 
 # The image jobs' node (deploy/zuul/gate-node/): its own BuildKit, the scratch registry and the image-check namespace,
-# and no secret and no farm token. The staging node (deploy/zuul/staging-node/): Docker with compose.
+# and no publishing secret. The projected aid-build-farm token is mounted but unused until #1701:
+# exact zuul-gate:gate maps to zuul-gate/dev; only trusted zuul-post:post maps to zuul-post/main.
+# The PR identity stays zuul-pr/dev. Revoke these independently in farm-revoked. #1733 prepares
+# the routes/tokens without changing consumers; the orchestrator alone releases the cutover hold.
+# The staging node (deploy/zuul/staging-node/): Docker with compose.
 - nodeset:
     name: aid-gate-image
     nodes:
       - name: node
-        label: aid-gate-node
+        label: aid-gate-pod-node
 
 - nodeset:
     name: aid-staging
@@ -153,6 +179,8 @@
     description: The image of beeper, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, beeper]
 
@@ -162,6 +190,8 @@
     description: The image of browser, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, browser]
 
@@ -171,6 +201,8 @@
     description: The image of build-farm-ui, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, build-farm-ui]
 
@@ -180,6 +212,8 @@
     description: The image of changedetection, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, changedetection]
 
@@ -189,6 +223,8 @@
     description: The image of clock, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, clock]
 
@@ -198,6 +234,8 @@
     description: The image of cloudflare, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, cloudflare]
 
@@ -207,6 +245,8 @@
     description: The image of fastmail, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, fastmail]
 
@@ -216,6 +256,8 @@
     description: The image of gatus, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, gatus]
 
@@ -225,6 +267,8 @@
     description: The image of github, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, github]
 
@@ -234,6 +278,8 @@
     description: The image of hetzner, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, hetzner]
 
@@ -243,6 +289,8 @@
     description: The image of kit, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, kit]
 
@@ -252,6 +300,8 @@
     description: The image of nextcloud, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, nextcloud]
 
@@ -261,6 +311,8 @@
     description: The image of preview, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, preview]
 
@@ -270,6 +322,8 @@
     description: The image of ssh, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, ssh]
 
@@ -279,6 +333,8 @@
     description: The image of stdio-mcp, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, stdio-mcp]
 
@@ -288,6 +344,8 @@
     description: The image of t3codebox, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, t3codebox]
 
@@ -297,6 +355,8 @@
     description: The image of template, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, template]
 
@@ -306,6 +366,8 @@
     description: The image of webhook-relay, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, webhook-relay]
 
@@ -315,6 +377,8 @@
     description: The image of zuul, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul]
 
@@ -324,6 +388,8 @@
     description: The image of zuul-ui, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul-ui]
 
@@ -335,6 +401,8 @@
       CI's `release-folder` and `aid-images` jobs and AID's release do.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", aid-images]
 
@@ -344,6 +412,8 @@
     description: The build farm's worker image built and checked, as CI's `farm-worker` job does.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", farm-worker]
@@ -354,6 +424,8 @@
     description: Zuul's node image built and checked, as CI's `zuul-node-image` job does.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
+    semaphores: [aid-scratch-registry]
+    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", zuul-node-image]

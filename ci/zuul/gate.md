@@ -39,12 +39,16 @@ How the build-and-review loop (`docs/review-loop.md`) runs on Zuul.
 - **Requeue.** A comment `regate` by an account with write access asks gate to take the pull request again: after a
   failure that was not its code (a flake, whose issue is filed first; a lost node), or when it should be in gate and
   is not (below). The requirements are read again, so `regate` lets in nothing that is not ready, approved and
-  checked. After a failure caused by its code, the builder pushes the fix and requests the review again.
+  checked: `aid-zuul:aid/check:success` must cover the current head. It cannot recover a failed `check`; use
+  [same-head check recovery](../../deploy/zuul/web.md#recovering-check-on-the-same-head) for a recorded unrelated
+  failure there. `recheck` has no trigger. After a failure caused by its code, the builder pushes the fix and
+  requests the review again.
 - **What Zuul reports, and checking that it was queued.** gate reports on the pull request as the check run
   `aid/gate`: queued, then in progress, then success and the merge, or failure with a comment that names the failed
   job and links its log. About 10 minutes after the pull request is ready, approved and `aid/check` passed on its
   head, `aid/gate` is there. If it is not (GitHub's event came late or not at all), comment `regate`, once. If that
-  starts nothing either, tell the orchestrator.
+  starts nothing either, tell the orchestrator. An approved pull request of kristofk/aid-zuul-config enters gate too,
+  which has no jobs for it: `aid/gate` goes from queued to skipped, and the orchestrator merges it (#1660).
 - **What wakes the bots.** The loop's automations ([`docs/review-loop.md`](../../docs/review-loop.md), "How AID routes
   the events") react to GitHub's review requests, submitted reviews and closed pull requests, never to a queue's
   events, so no queue-specific event is needed. The approval reaches the builder as every review does
@@ -70,60 +74,59 @@ rebases the PR's commits: the resulting commit IDs differ. Only Zuul's App updat
 for the administrator's recorded state/recovery exception. A PR containing a merge commit
 must be rebased before GitHub can merge it this way.
 
-### Closing linked issues
-
-Rebase merging is not evidence that GitHub closed the PR's linked issues. The first live gate merge (#1652,
-2026-11-16) left #1651 open. The focused testbed also reproduced this with the pinned Zuul 14.3.0 driver's
-`mergePull(..., method="rebase")` and an Issues-write workflow token
-([run 43847454926](https://github.com/Opifex-Magnus/aid-zuul-testbed/actions/runs/43847454926)). Its linked issue
-stayed open for 90 seconds. `aid-zuul` has Issues read; raising it alone is not a tested remedy for rebase merges.
-
-The fallback is `aid-close-merged-issues`, a final, trusted, nodeless job in `aid-zuul-config`'s `post-issues` pipeline
-([config PR #23](https://github.com/kristofk/aid-zuul-config/pull/23), **activation pending**). It reads every commit
-in the main push and its associated PRs, requires a merge into the default branch by `aid-zuul[bot]` whose merge SHA
-is in that push, then closes GitHub's `closingIssuesReferences` as completed. It uses GitHub's interpretation of
-closing keywords and links, including pagination, rather than parsing descriptions. Ordinary references stay open;
-already closed issues are left alone. A repeat of the job is safe. External issue links are reported and skipped:
-the token reaches AIDepartment alone.
-
-`post-issues` uses the independent manager and retains every main push, including two merges arriving while an
-earlier buildset is active. Publishing's `post` pipeline uses the supercedent manager, which may discard intermediate
-queued pushes. Issue closure must not share that pipeline: its old/new revision range would omit a dropped merge.
-The pinned-manager regression reproduces that omission with `post`, then proves `post-issues` preserves both merges
-and closes both linked issues.
-
-GitHub can deliver the rebase push before its commit-to-PR index is ready. The helper retries missing associations
-for up to a minute before treating commits with no associated PR as direct pushes.
-
-The focused testbed [run 43849085883](https://github.com/Opifex-Magnus/aid-zuul-testbed/actions/runs/43849085883)
-passed with AIDepartment `84afb9b9` and config `ee34a55`: the real pinned driver rebased PR #45; the trusted helper
-closed keyword-linked #43 as completed, left ordinary reference #44 open, and closed nothing on a repeat. Cleanup
-then closed the ordinary-reference fixture as not planned. This proves the helper's GitHub path with the workflow
-token, separately from the pending production App grant and activation below.
-
-The job uses `aid-release`, which already holds Issues write for release/nightly reports, with a fresh token scoped
-to **Contents read, Pull requests read, Issues write**. It does not need `aid-zuul`'s private key. Its key and token
-stay on the executor and the token is revoked afterward. The shared guard rejects changes and pipelines other than
-`post-issues`, so no PR playbook can use it. API or permission errors fail the job rather than claiming issue closure.
-
-Activation, by the owner after independent review: give `aid-release` **Pull requests: read**, accept that grant on
-its AIDepartment installation, then merge config PR #23. Its existing token helper checks the exact accepted grant.
-No gate merge method or protection change is needed. Check an ordinary merged PR's linked issue and the
-`aid-close-merged-issues` build in Zuul; a successful gate alone does not establish that this post job succeeded.
-For recovery, rerun the helper with the failed push's `oldrev`/`newrev` using a newly scoped token. Check the issue's
-closed event before marking it Done. Removing the post job rolls the fallback back; it reopens no issue.
-
 Each job has its own timeout, two hours from the trusted base unless a job reduces it.
 Waiting for a node is not part of that timeout. A timeout fails the buildset. Returning a PR
 to draft or adding `hold` dequeues it, though its check may remain pending until a later run.
 
 ## The full job on a build node
 
-`aid-bazel-everything` runs `bazel test --config=ci --config=zuul //...` on the farm. The Zuul
+`aid-bazel-everything` runs `bazel --host_jvm_args=-Xmx3g test --config=ci --config=zuul //...` on the farm. The Zuul
 node has no compiler and no local fallback. The farm toolchain, dependency metadata and
 `.bazelrc` own execution; build logic stays in Bazel and repository scripts. The production
 proof is build `a52d31e7a74846b386930c3495c54115` on 2026-11-15: 1822 actions, 30 tests passed,
 21 executed, in 1519.002 seconds (#1485). It proves that Bazel job, not coverage of other gate jobs.
+
+The full OCI graph in #1701 exhausted the Bazel Java heap after action completion (#1842,
+exit 33); no Kubernetes OOMKill, eviction or memory pressure was observed. The job explicitly selects the existing
+6 GiB gate-image node, leaving 3 GiB outside the explicit 3 GiB heap for native JVM memory,
+client/repository work, SSH and logs. The 128 MiB scheduling request and namespace allocation
+stay unchanged. The repository-wide 25% heap policy remains the default for other jobs.
+The startup override and `nodeset: aid-gate-image` travel together; the general PR node has
+only 2 GiB and cannot support this heap. Targeted tests check configuration and headroom,
+not whole-graph peak usage: that proof requires a future operator-authorized full gate.
+Sharing this node does not make the Bazel job a scratch-registry client: its Bazel role
+runs `test //...` against the farm/CAS, without image upload or runtime image pulls.
+It takes no `aid-scratch-registry` semaphore. The `gate.sh` operations `image`,
+`aid-images`, `farm-worker` and `zuul-node-image` push scratch images and pull them
+for runtime checks; those lifetimes require the registry semaphore and cleanup-run,
+regardless of which nodeset runs them.
+Do not retry the exhausted gate to validate this change.
+
+Execution RPC deadlines include queue time. Zuul therefore uses
+[`zuul-grpc-service-config.json`](../../build/farm/zuul-grpc-service-config.json), which retains the
+10-second capability and 60-second cache deadlines but omits the Execution service's absolute
+deadline, for both Execute and WaitExecution (#1770). This matches Bazel's default treatment of
+Execution streams: workers enforce the action's execution timeout after it starts; waiting for a
+slot cannot consume that budget. An unavailable endpoint still fails its bounded capability calls.
+A scheduler that accepts work and never completes it is bounded by the job timeout (two hours for
+the full job), rather than a 120-second RPC deadline. This intentionally trades early detection of
+a stalled scheduler for allowing a saturated healthy queue to drain.
+
+Zuul retains the failure-rate threshold of 100 so transport retries cannot cause an early
+whole-invocation breaker abort (#1719). The default `remote` configuration retains its deadlines,
+breaker and local fallback. `ci/bazel-fallback.mjs` covers the old early-abort trigger, retry
+exhaustion despite that threshold, a saturated two-slot queue waiting over 120 seconds, stream
+reconnection through WaitExecution, cancellation of a stalled scheduler, and refused service.
+
+The job retains `remote-rpc.pb`, `execution.json` and `build-events.jsonl` under its log URL,
+including when Bazel fails. The RPC log captures method/status/timestamps before the circuit breaker
+can refuse later calls; the other logs distinguish actual remote execution, cached results and unrun
+targets. The trusted base job fetches the node's `~/zuul-output/logs` in post-run. See the farm's
+[RPC abort procedure](../../deploy/thunderbox/build-farm.md#an-rpc-circuit-breaker-abort)
+for decoding, correlation and recovery requirements. A breaker abort is not a test pass or a test flake.
+The BEP keeps local file paths rather than uploading referenced files through the failed farm; those
+paths describe the build node and are not retained test-output attachments. A failure before execution
+can leave an empty execution log, and interruption can leave partial logs; neither proves a target passed.
 
 ## The gate's jobs
 
@@ -172,12 +175,23 @@ GitHub Actions' artifacts. The cheap layer's steps (the Node suites, the CI and 
 (#1520).
 
 **The nodes.** The PR node ([`deploy/zuul/node/`](../../deploy/zuul/node/README.md)) runs Bazel's, the ingress
-suite's, the infrastructure checks' and the quarantine runs' jobs, one at a time, with the farm's `dev` credential; its
+suite's, the infrastructure checks' and the quarantine runs' jobs, sharing two disposable slots with check,
+with the farm's `dev` credential; its
 image carries the Swift runtime libraries, without a compiler, for the farm-built `aid` the ingress suite starts. The
 gate's image node ([`deploy/zuul/gate-node/`](../../deploy/zuul/gate-node/README.md)) runs the image jobs: the post
 node's image, with a BuildKit of its own ([`deploy/zuul/gate-buildkit/`](../../deploy/zuul/gate-buildkit/README.md)),
-the scratch registry and the image-check namespace, no secret and no farm token. The staging node
+the scratch registry and the image-check namespace, with no publishing secret. Its projected `aid-build-farm`
+token is mounted but unused until #1701: exact subject `system:serviceaccount:zuul-gate:gate` maps to
+`zuul-gate`/dev, while only trusted `system:serviceaccount:zuul-post:post` maps to `zuul-post`/main.
+The PR node stays `zuul-pr`/dev; each identity is revoked separately through `farm-revoked`.
+[Prerequisite deployment](../../deploy/zuul/image-build-prerequisites/README.md) preserves BuildKit and current
+consumers; only the orchestrator releases the held switch after its live dependencies. The staging node
 ([`deploy/zuul/staging-node/`](../../deploy/zuul/staging-node/README.md)) is Docker, for staging alone.
+Every check/gate/post job runs in a fresh disposable pod. `gate.sh` creates job-local temporary work;
+it does not inspect or terminate earlier processes, repair a reused state directory, or shut down a warm
+Bazel server for the next job. The launcher deletes the pod after the job, including cancellation.
+Image-check cleanup still deletes that build's separate scratch pods. Provisioning, proof and rollback follow
+[disposable-nodes.md](disposable-nodes.md).
 
 ### Turning the gate's jobs on
 
@@ -195,8 +209,10 @@ in [cutover.md](cutover.md).
 2. **The gate's image node and its BuildKit** (the admin, after a heads-up to the orchestrator; ThunderBox's session
    for its grants): their READMEs' "Applying it".
 3. **The staging node**, as step 0 decides.
-4. **aid-zuul-config** (the orchestrator merges, after the other bot's review): the labels `aid-gate-node` and
-   `aid-staging-node`, and the providers with each node's host key, as `aid-post-node`'s are. Check:
+4. **aid-zuul-config** (the orchestrator merges, after the other bot's review): the labels `aid-gate-pod-node` and
+   `aid-staging-node`, with SSH host-key verification (staging pins its static key; disposable gate/post
+   pods are scanned by the launcher). Drain and retire old static allocations before switching providers;
+   see [disposable-nodes.md](disposable-nodes.md#provider-migration-prerequisite-1754). Check:
    `/api/tenant/aid/config-errors` is `[]`.
 5. **A gate run** of an ordinary pull request at the switch: `aid-gate-plan`'s log names the planned jobs, they run,
    and the others are `SKIPPED`.
@@ -204,3 +220,8 @@ in [cutover.md](cutover.md).
 The testbed's `testbed/check-github-gate.py` and `testbed/scenario.py` exercise approval,
 current-head handling, holding, timeouts, speculative ordering and regating independently
 of production job coverage. Historical rollout evidence is in [comparison.md](comparison.md).
+
+Node suites are Bazel tests (#1313): `aid-cheap-checks` selects `//:node_<suite>` and CI policy targets,
+`aid-bazel-everything` includes them through `//...`, and `aid-gate-quarantine-node` invokes the manual uncached
+`//:node_quarantine` action. The wrappers execute on the farm with pinned Node; results are Bazel-cached.
+See [README.md](README.md#the-cheap-checks) for inputs, loopback requirements and report retrieval.
