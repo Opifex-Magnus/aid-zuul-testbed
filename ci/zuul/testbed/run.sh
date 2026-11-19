@@ -145,17 +145,21 @@ echo "== scenario"
 secret_args=()
 [ "$secrets" != 1 ] || secret_args=(--secret "$(sed -n 's/^TESTBED_SECRET=//p' "$here/testbed.env")" \
   --project-key "$here/project-key.pem")
-# With TESTBED_LOOP_PULL, the two-agent loop's check alone, on that pull request (scenario.py, check 13).
+# With TESTBED_LOOP_PULL, the two-agent loop's check alone, on that pull request (scenario.py, check 14).
 loop=()
 if [ -n "${TESTBED_LOOP_PULL:-}" ]; then
   [[ "$TESTBED_LOOP_PULL" =~ ^[0-9]+$ ]] || { echo "TESTBED_LOOP_PULL '$TESTBED_LOOP_PULL' is not a pull request's number" >&2; exit 2; }
   loop=(--loop-pull "$TESTBED_LOOP_PULL")
 fi
+native=()
+if [ "${TESTBED_NATIVE_LAUNCHER:-false}" = true ]; then
+  native=(--native-launcher)
+fi
 python3 -I -B "$here/scenario.py" --zuul http://127.0.0.1:9000 --tenant aid --repository "$TESTBED_REPOSITORY" \
-  --config-repository "$config" --checkout "$root" "${secret_args[@]}" "${loop[@]}"
+  --config-repository "$config" --checkout "$root" "${secret_args[@]}" "${loop[@]}" "${native[@]}"
 
-if [ "${#loop[@]}" -eq 0 ] && grep -qx 'TESTBED_REPORTS=1' "$here/testbed.env"; then
+if [ "${#loop[@]}" -eq 0 ] && [ "${#native[@]}" -eq 0 ] && grep -qx 'TESTBED_REPORTS=1' "$here/testbed.env"; then
   python3 -I -B "$here/reports.py" "$work/reports.jsonl"
 else
-  echo "== MQTT lifecycle assertions skipped: loop-only run or copied pipelines have no aid-events reporter"
+  echo "== MQTT lifecycle assertions skipped: focused run or copied pipelines have no aid-events reporter"
 fi

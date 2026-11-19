@@ -6,9 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       loop_pull:
-        description: The builder's pull request for the two-agent loop's check (13) alone; empty runs checks 1 to 12
+        description: The builder's pull request for the two-agent loop's check (14) alone; empty runs the standard scenarios
         required: false
         default: ""
+      native_launcher:
+        description: Only layout, real job dispatch and unknown-label validation
+        type: boolean
+        default: false
 permissions:
   contents: write
   pull-requests: write
@@ -32,6 +36,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TESTBED_REPOSITORY: ${{ github.repository }}
+          TESTBED_NATIVE_LAUNCHER: ${{ inputs.native_launcher }}
           TESTBED_LOOP_PULL: ${{ inputs.loop_pull }}
       - name: Preserve failure diagnostics
         if: failure()

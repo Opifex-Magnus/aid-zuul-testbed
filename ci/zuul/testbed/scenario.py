@@ -7,37 +7,37 @@ GitHub here), and reads the result from Zuul's API and from the commit status Zu
   1. The layout loads: the copy of kristofk/aid-zuul-config as the config project, and AID's project, with no
      configuration error.
   2. A pull request that adds a job runs that job on itself, before it exists on main.
-  Additionally, an unknown node label fails configuration without dispatching builds (Nodepool is disabled).
-  3. A pull request that defines a base job in AID's project is refused, with a configuration error.
-  4. A pull request that defines a pipeline in AID's project is refused, with a configuration error.
-  5. A proposed job can read the fixture farm token in every phase of check, but none of its
+  3. An unknown node label fails configuration without dispatching builds (Nodepool is disabled).
+  4. A pull request that defines a base job in AID's project is refused, with a configuration error.
+  5. A pull request that defines a pipeline in AID's project is refused, with a configuration error.
+  6. A proposed job can read the fixture farm token in every phase of check, but none of its
      pre/run/post/cleanup hooks execute in check-external: the trusted base rejects it first.
 
 Then the gate's rows (../gate.md, "Zuul's check and gate"), each seen on the test bed's copies:
 
-  6. A job runs no longer than its timeout.
-  7. Ready means queued: a draft whose check passed stays out of gate; once ready, it enters, gate runs the full jobs
+  7. A job runs no longer than its timeout.
+  8. Ready means queued: a draft whose check passed stays out of gate; once ready, it enters, gate runs the full jobs
      (and not check's cheap ones), and Zuul merges it by rebase, so main stays linear.
-  8. The hold label keeps a ready pull request out of gate, and takes one out that is in it; without it, it comes back.
-  9. The speculative queue: two pull requests are tested at once, the second on top of the first, in a window of two.
+  9. The hold label keeps a ready pull request out of gate, and takes one out that is in it; without it, it comes back.
+  10. The speculative queue: two pull requests are tested at once, the second on top of the first, in a window of two.
      The first fails (a flaky test), which starts the second again without it, and the second merges. A "regate"
      comment enqueues the first again, and it merges.
-  10. A ready pull request without hold enters gate when check passes on its head, with no other event. A push takes
+  11. A ready pull request without hold enters gate when check passes on its head, with no other event. A push takes
      it out, and it comes back once check passes on the new head.
 
 Then the secrets for jobs (deploy/zuul/job-secrets.md), when sync.sh added the test bed's jobs with a secret:
 
-  11. A job with a secret, defined in the config project, gets it in post on main; one whose secret may not go to
+  12. A job with a secret, defined in the config project, gets it in post on main; one whose secret may not go to
      post is failed by the trusted guard before its run playbook. A job with an OIDC secret gets a token Zuul signed,
      with the claims ThunderBox's pusher checks (../publish.md, "The pusher").
-  12. A pull request cannot have that secret: Zuul refuses it in check, a job inheriting the job, and a job naming the
+  13. A pull request cannot have that secret: Zuul refuses it in check, a job inheriting the job, and a job naming the
      secret.
 
-Checks 1 to 12 run with a copy of gate that leaves out its requirement of an approving review (sync.sh): the run's
-token opens their pull requests, and nobody may approve their own. Check 13 runs alone (--loop-pull), with a copy that
+Checks 1 to 13 run with a copy of gate that leaves out its requirement of an approving review (sync.sh): the run's
+token opens their pull requests, and nobody may approve their own. Check 14 runs alone (--loop-pull), with a copy that
 keeps it (TESTBED_LOOP=1), on a pull request that the builder opened as someone else:
 
-  13. The two-agent loop (../gate.md, "The two-agent loop"): the builder's draft passes check; ready, a comment review
+  14. The two-agent loop (../gate.md, "The two-agent loop"): the builder's draft passes check; ready, a comment review
      and "regate" each leave it out of gate; the reviewer's approval of a held head, and the builder's push after it,
      leave it out, as GitHub dismisses that approval; the reviewer's approval of the new head lets it in, Zuul merges
      it, and its issue closes.
@@ -51,6 +51,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -501,7 +502,7 @@ BASE_JOB = """\
 
 
 def untrusted_base_job_is_refused(bed):
-    log("3. A pull request that defines a base job in AID's project is refused")
+    log("4. A pull request that defines a base job in AID's project is refused")
     pull = bed.open_pull_request("untrusted-base-job", {"ci/zuul/zuul.d/testbed-base.yaml": BASE_JOB},
                                  "A base job in AID's untrusted project")
     expect(bed.commit_status(pull, timeout=600) == "failure", "Zuul reported failure on the pull request")
@@ -530,14 +531,20 @@ UNKNOWN_LABEL_JOB = """\
 
 
 def unknown_label_is_refused(bed):
-    log("An unknown label is a configuration error, without a Nodepool request")
-    pull = bed.open_pull_request("unknown-label", {"ci/zuul/zuul.d/testbed-unknown.yaml": UNKNOWN_LABEL_JOB},
-                                 "Unknown node label cannot fall back to Nodepool")
+    log("3. An unknown label is a configuration error, without a Nodepool request")
+    library = bed.git("show", "origin/main:ci/zuul/zuul.d/jobs.yaml")
+    # Proposed configuration only; production cleanup migration belongs to #1889.
+    library = re.sub(r"(?m)^    cleanup-run: (.+)$",
+                     r"    post-run:\n      - name: \1\n        cleanup: true", library)
+    pull = bed.open_pull_request("unknown-label", {
+        "ci/zuul/zuul.d/testbed-unknown.yaml": UNKNOWN_LABEL_JOB,
+        "ci/zuul/zuul.d/jobs.yaml": library,
+    }, "Unknown node label cannot fall back to Nodepool")
     expect(bed.commit_status(pull, timeout=600) == "failure", "unknown label fails check within its deadline")
-    # Deprecation warnings may arrive before the actual configuration error.
+    # The probe isolates label validation from unrelated cleanup-run warnings (#1889).
     comments = wait(f"Zuul's missing-label diagnostic on #{pull['number']}",
                     lambda: [body for body in bed.comments(pull)
-                             if "testbed-nonexistent-label" in body and "label" in body.lower()], 120)
+                             if 'The label "testbed-nonexistent-label" was not found.' in " ".join(body.split())], 120)
     expect(bool(comments), f"Zuul reports the missing label: {comments[-1][:300]!r}")
     _, builds = bed.check_result(pull, timeout=120)
     expect(not builds, f"no job was dispatched for an invalid layout: {builds}")
@@ -556,7 +563,7 @@ PIPELINE = """\
 
 
 def untrusted_pipeline_is_refused(bed):
-    log("4. A pull request that defines a pipeline in AID's project is refused")
+    log("5. A pull request that defines a pipeline in AID's project is refused")
     pull = bed.open_pull_request("untrusted-pipeline", {"ci/zuul/zuul.d/testbed-pipeline.yaml": PIPELINE},
                                  "A pipeline in AID's untrusted project")
     expect(bed.commit_status(pull, timeout=600) == "failure", "Zuul reported failure on the pull request")
@@ -588,7 +595,7 @@ def nodes_text(path):
 
 
 def external_job_cannot_read_farm(bed):
-    log("5. check-external is rejected before every untrusted hook, including post and cleanup")
+    log("6. check-external is rejected before every untrusted hook, including post and cleanup")
     job = "aid-testbed-farm-probe"
     files = {"ci/zuul/zuul.d/testbed-farm.yaml": f"""\
 - job:
@@ -669,7 +676,7 @@ sleep 600
 
 
 def job_timeout(bed):
-    log("6. A job runs no longer than its timeout")
+    log("7. A job runs no longer than its timeout")
     pull = bed.open_pull_request("timeout", {"ci/zuul/zuul.d/testbed-timeout.yaml": TIMEOUT_JOB,
                                              "ci/testbed-sleep.sh": SLEEP}, "A job that outlives its timeout")
     started = time.monotonic()
@@ -697,7 +704,7 @@ def linear(bed, old, new, pull):
 
 
 def ready_means_queued(bed):
-    log("7. Ready means queued, gate runs the full jobs, and Zuul merges by rebase")
+    log("8. Ready means queued, gate runs the full jobs, and Zuul merges by rebase")
     pull = bed.open_pull_request("ready", behaviour("ready", ["# ready means queued"]),
                                  "Gate: ready means queued", draft=True)
     bed.send_check_passed(pull)
@@ -714,7 +721,7 @@ def ready_means_queued(bed):
 
 
 def hold(bed):
-    log("8. The hold label keeps a pull request out of gate, and takes it out")
+    log("9. The hold label keeps a pull request out of gate, and takes it out")
     until = int(time.time()) + 900
     pull = bed.open_pull_request("hold", behaviour("hold", [f"{until} sleep 60"]), "Gate: hold", draft=True)
     bed.add_label(pull, "hold")
@@ -740,7 +747,7 @@ def hold(bed):
 
 
 def speculative_queue(bed):
-    log("9. Two pull requests at once, a flaky failure, and regate")
+    log("10. Two pull requests at once, a flaky failure, and regate")
     # The first's test fails until flaky_until (a flaky test), long enough for its first gate run and short enough
     # for the regate after it; both sleep, so that their builds are seen running at once.
     sleep_until = int(time.time()) + 900
@@ -786,7 +793,7 @@ def speculative_queue(bed):
 
 
 def new_head_comes_back(bed):
-    log("10. A ready pull request enters gate when check passes on it, and again after a push")
+    log("11. A ready pull request enters gate when check passes on it, and again after a push")
     until = int(time.time()) + 900
     pull = bed.open_pull_request("new-head", behaviour("new-head", [f"{until} sleep 60"]), "Gate: a new head")
     bed.stays_out_of_gate(pull, "check has not passed on it yet", seconds=10)
@@ -812,7 +819,7 @@ def der(pem):
 
 
 def post_job_gets_secret(bed):
-    log("11. A job with a secret gets it in post, on main; the guard fails one whose secret may not go there")
+    log("12. A job with a secret gets it in post, on main; the guard fails one whose secret may not go there")
     main = bed.github.repo("/commits/main")
     repository = bed.github.repo()
     before = main["parents"][0]["sha"] if main["parents"] else "0" * 40
@@ -927,7 +934,7 @@ SECRET_NAMED = """\
 
 
 def pull_request_cannot_have_secret(bed):
-    log("12. A pull request cannot have the secret")
+    log("13. A pull request cannot have the secret")
     cases = [
         ("secret-in-check", SECRET_IN_CHECK, "The job with the secret in check",
          # Zuul's words (model.py, the job graph's pending errors).
@@ -946,7 +953,7 @@ def pull_request_cannot_have_secret(bed):
         expect(not [build for build in builds if build["job_name"].startswith("testbed-secret")
                     and build["result"] == "SUCCESS"], f"{title}: no job of the pull request's with the secret ran")
 def two_agent_loop(bed, number):
-    log("13. The two-agent loop: the builder's pull request enters gate only once the reviewer approved its head")
+    log("14. The two-agent loop: the builder's pull request enters gate only once the reviewer approved its head")
     pull = bed.pull({"number": number})
     expect(pull["state"] == "open" and pull["draft"], f"the builder's #{number} is an open draft")
     bed.opened.append(number)
@@ -1016,13 +1023,19 @@ def main():
     parser.add_argument("--repository", required=True, help="the test bed's copy of AIDepartment, owner/name")
     parser.add_argument("--config-repository", required=True, help="its copy of kristofk/aid-zuul-config, owner/name")
     parser.add_argument("--checkout", required=True, help="a checkout of it, that can push")
-    parser.add_argument("--secret", default="", help="the fixture secret sync.sh encrypted; none skips checks 11 and 12")
+    parser.add_argument("--secret", default="", help="the fixture secret sync.sh encrypted; none skips checks 12 and 13")
     parser.add_argument("--project-key", help="the test bed's project key for the config copy, sync.sh's")
+    parser.add_argument("--native-launcher", action="store_true",
+                        help="run layout, successful dispatch and unknown-label checks only")
     parser.add_argument("--loop-pull", type=int,
                         help="the builder's pull request: run the two-agent loop's check (13) alone, on it")
     args = parser.parse_args()
     bed = Testbed(args)
-    if args.loop_pull:
+    if args.loop_pull and args.native_launcher:
+        parser.error("--loop-pull and --native-launcher are mutually exclusive")
+    if args.native_launcher:
+        checks = [layout_loads, new_job_runs_speculatively, unknown_label_is_refused]
+    elif args.loop_pull:
         checks = [layout_loads, lambda bed: two_agent_loop(bed, args.loop_pull)]
     else:
         checks = [layout_loads, new_job_runs_speculatively, unknown_label_is_refused, untrusted_base_job_is_refused,
@@ -1031,7 +1044,7 @@ def main():
         if args.secret:
             checks += [post_job_gets_secret, pull_request_cannot_have_secret]
         else:
-            log("Checks 11 and 12 are left out: the aid-zuul-config checkout has no secrets guard (sync.sh).")
+            log("Checks 12 and 13 are left out: the aid-zuul-config checkout has no secrets guard (sync.sh).")
     try:
         for check in checks:
             check(bed)

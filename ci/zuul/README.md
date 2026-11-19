@@ -192,7 +192,7 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
 12. three pull requests are refused with Zuul's own words: one that lists that job in `check` ("does not allow
     post-review job"), one with a job inheriting it ("is final and can not act as a parent"), and one with a job naming
     its secret ("Secrets must be defined in the same project in which they are used"). The workflow's token opens the
-    pull requests of checks 1 to 12, and GitHub lets nobody approve their own, so the copy of gate for them leaves out
+    pull requests of checks 1 to 13, and GitHub lets nobody approve their own, so the copy of gate for them leaves out
     its requirement of an approving review ([`sync.sh`](testbed/sync.sh));
 13. the two-agent loop, in a run of its own ([below](#the-two-agent-loop-on-the-test-bed)): gate lets the builder's
     pull request in only once the reviewer approved its head, and Zuul merges it.
@@ -213,7 +213,7 @@ file of `zuul.d/` that defines or names a secret, out of the config copy. In the
 `deploy/zuul/encrypt-secret.sh` for a project key it makes. It also lists those jobs in `post` in the test bed's copy
 (`zuul.d/testbed-post.yaml`). [`testbed/import-key.py`](testbed/import-key.py) gives Zuul that key before the scheduler
 starts, as a restore of the keys would (`zuul-admin import-keys`). The key and the fixture are public in the copies,
-and guard nothing. A checkout of aid-zuul-config without the guard runs without checks 11 and 12. aid-zuul-config's own
+and guard nothing. A checkout of aid-zuul-config without the guard runs without checks 12 and 13. aid-zuul-config's own
 jobs with secrets are checked by Zuul on ThunderBox, on the pull request that changes them.
 
 One thing differs from ThunderBox's Zuul: the token. For every pull request, Zuul's GitHub driver asks for the
@@ -261,11 +261,11 @@ only those copies run the final MQTT lifecycle assertions. A broker connection b
 
 ### The two-agent loop on the test bed
 
-Check 13 needs two accounts: the builder, who opens the pull request, and the reviewer, who approves it. So you are
+Check 14 needs two accounts: the builder, who opens the pull request, and the reviewer, who approves it. So you are
 the builder, with your own `gh`, and the run's token the reviewer. It runs alone, after a sync that keeps gate's
 approval (`TESTBED_LOOP=1`), and `main` of the test bed's copy must dismiss an approval when a commit is pushed, as
 AIDepartment's `main` does from #1355 ([`deploy/zuul/github.md`](../../deploy/zuul/github.md), "Branch protection").
-Once, protect it so, with no approval required, which checks 1 to 12 need:
+Once, protect it so, with no approval required, which checks 1 to 13 need:
 
 ```sh
 gh api -X PUT repos/<you>/aid-zuul-testbed/branches/main/protection --input - <<'JSON'
@@ -289,7 +289,7 @@ gh workflow run testbed.yml --repo <you>/aid-zuul-testbed -f loop_pull=$pull
 The scenario plays the GitHub side of both bots on it: check on the draft; ready, a comment review and `regate`, none
 of which lets it in; the reviewer's approval of a held head, then the builder's push after it, which GitHub answers by
 dismissing that approval; the reviewer's approval of the new head, which lets it in. Zuul merges it by rebase, and the
-issue closes. Sync without `TESTBED_LOOP` before the next run of checks 1 to 12.
+issue closes. Sync without `TESTBED_LOOP` before the next run of checks 1 to 13.
 
 ## On ThunderBox
 
@@ -352,3 +352,13 @@ naming an unknown label and no dispatched builds. Existing legacy requests need 
 current-head replay; changing the flag alone cannot migrate them. The
 [native-launcher migration runbook](../../deploy/thunderbox/zuul.md#completing-the-native-launcher-migration-1492)
 requires a real successful Zuul dispatch alongside node readiness and direct SSH/remote Bazel checks.
+
+For a focused native-launcher regression, dispatch the copied workflow with
+`gh workflow run testbed.yml --repo <you>/aid-zuul-testbed -f native_launcher=true`.
+It runs numbered checks 1–3: layout load, a successful real job dispatch, and unknown-label refusal.
+The unknown-label PR converts deprecated `cleanup-run` entries to equivalent cleanup post-runs **in that
+probe's proposed library only** so unrelated warnings cannot hide the real diagnostic (see #1889).
+Production cleanup syntax is unchanged. The assertion requires Zuul's exact `The label "…" was not found.`
+wording, a failed check, and zero dispatched builds; merely quoting `label: …` is insufficient.
+The focused run omits gate/secrets scenarios and their whole-run MQTT assertions; it does not replace the
+standard test bed for changes to those paths.

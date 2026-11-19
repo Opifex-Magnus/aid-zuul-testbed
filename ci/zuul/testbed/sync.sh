@@ -11,7 +11,7 @@
 # TESTBED. Everything in either checkout but .git is replaced. Commit and push
 # both to their main, the config copy first, then dispatch the workflow. The files of record are AIDepartment's and
 # aid-zuul-config's; the copies are only for the test. TESTBED_LOOP=1 makes the copies for the two-agent loop's run
-# (check 13), which keep gate's requirement of an approving review (below).
+# (check 14), which keep gate's requirement of an approving review (below).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -82,8 +82,8 @@ if [ "$(grep -c '^ *status: failure$' "$pipelines")" -ne "$(grep -A1 '^ *status:
   echo "$pipelines: a failure reporter does not comment, so a configuration error would not be seen" >&2; exit 1
 fi
 # gate's requirement of an approving review (#1348): the run's token opens every pull request of the scenario, and
-# GitHub lets nobody approve their own. So the copy for checks 1 to 12 leaves the requirement out. With TESTBED_LOOP=1
-# it keeps it, for check 13 alone: there the builder's pull request is someone else's, which the run's token approves
+# GitHub lets nobody approve their own. So the copy for checks 1 to 13 leaves the requirement out. With TESTBED_LOOP=1
+# it keeps it, for check 14 alone: there the builder's pull request is someone else's, which the run's token approves
 # (README.md, "The two-agent loop on the test bed").
 approvals=$(grep -c '^ *- type: approved$' "$pipelines" || true)
 if [ "${TESTBED_LOOP:-}" = 1 ]; then
