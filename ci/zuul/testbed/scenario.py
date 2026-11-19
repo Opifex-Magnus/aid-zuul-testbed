@@ -415,6 +415,11 @@ def layout_loads(bed):
 
     wait("the tenant's pipelines", loaded, 600)
     _, errors = bed.zuul.get("/config-errors")
+    # The API includes nonfatal deprecations alongside errors in the pinned Zuul runtime.
+    for error in errors:
+        if error.get("severity") == "warning":
+            log(f"  configuration warning: {error.get('error', '')}")
+    errors = [error for error in errors if error.get("severity") != "warning"]
     expect(errors == [], f"the tenant has no configuration error {[error.get('error', '')[:300] for error in errors]}")
     _, projects = bed.zuul.get("/projects")
     found = {(project["canonical_name"], project["type"]) for project in projects}

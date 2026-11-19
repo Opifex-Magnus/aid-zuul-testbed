@@ -252,7 +252,12 @@ gh run watch --repo <you>/aid-zuul-testbed --exit-status "$(gh run list --repo <
 ```
 
 The run takes about 20 minutes, most of it the gate's checks. It closes the pull requests Zuul did not merge and deletes their branches; `sync.sh` puts `main` back.
-A failed run prints every service's log.
+A failed run prints every service's log and the retained executor job and Ansible process outputs, including
+failures before `job-output.txt` exists. The workflow keeps that output in its `testbed-diagnostics` artifact
+before Compose cleanup. `run.sh` also writes it to `testbed-diagnostics.txt` (override with `TESTBED_DIAGNOSTICS`).
+The disposable log store is writable by the executor sandbox's user, independently of the workflow runner's UID.
+`sync.sh` records whether the copied trusted pipelines have `aid-events` reporters in `TESTBED_REPORTS`;
+only those copies run the final MQTT lifecycle assertions. A broker connection by itself does not enable them.
 
 ### The two-agent loop on the test bed
 
