@@ -1,0 +1,4 @@
+- job:
+    name: testbed-base
+    parent: null
+    description: A base job of AID's own, which would replace the config project's checkout.
