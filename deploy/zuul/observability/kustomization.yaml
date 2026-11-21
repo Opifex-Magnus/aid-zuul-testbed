@@ -1,0 +1,9 @@
+# Separate opt-in rollout: requires an additional 32 MiB node reservation and admin RBAC.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zuul
+resources: [observer.yaml]
+components: [../server/version]
+configMapGenerator:
+  - name: ci-observer
+    files: [observer.py]

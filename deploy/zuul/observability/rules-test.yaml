@@ -1,0 +1,664 @@
+{
+  "rule_files": [
+    "../../build-farm/server/observability/config/rules.yaml"
+  ],
+  "evaluation_interval": "1m",
+  "tests": [
+    {
+      "name": "zuul/scheduler",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul\",component=\"scheduler\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "zuul",
+                "component": "scheduler"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "zuul/launcher",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul\",component=\"launcher\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "zuul",
+                "component": "launcher"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "zuul/web",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul\",component=\"web\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "zuul",
+                "component": "web"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "zuul-executor/executor",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul-executor\",component=\"executor\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "zuul-executor",
+                "component": "executor"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/frontend",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"frontend\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "frontend"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/scheduler",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"scheduler\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "scheduler"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/storage",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"storage\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "storage"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/worker-main",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"worker-main\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "worker-main"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/worker-dev",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"worker-dev\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "worker-dev"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/usage",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"usage\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "usage"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/farm-prometheus",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"farm-prometheus\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "farm-prometheus"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build-farm/portal",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"build-farm\",component=\"portal\"}",
+          "values": "6+0x45"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "29m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "31m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "namespace": "build-farm",
+                "component": "portal"
+              },
+              "exp_annotations": {
+                "summary": "CI component logs more than five errors per ten minutes for thirty minutes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "stuck check",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_stuck_check_runs",
+          "values": "1+0x10"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "6m",
+          "alertname": "CIStuckCheckRun",
+          "exp_alerts": [
+            {
+              "exp_labels": {},
+              "exp_annotations": {
+                "summary": "GitHub check remains open after its Zuul buildset finished"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "broken scan",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_observer_scan_ok{scan=\"checks\"}",
+          "values": "0+0x10"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "6m",
+          "alertname": "CIObserverUnavailable",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "scan": "checks"
+              },
+              "exp_annotations": {
+                "summary": "CI error/check observer is unavailable or cannot complete a scan"
+              }
+            },
+            {
+              "exp_labels": {
+                "job": "ci-observer"
+              },
+              "exp_annotations": {
+                "summary": "CI error/check observer is unavailable or cannot complete a scan"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "low rate and recovered checks",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul\",component=\"launcher\"}",
+          "values": "5+0x45"
+        },
+        {
+          "series": "ci_stuck_check_runs",
+          "values": "1 1 0+0x43"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "40m",
+          "alertname": "CIComponentErrorRate",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "40m",
+          "alertname": "CIStuckCheckRun",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "notification health lifecycle: component errors",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "up{job=\"ci-observer\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"logs\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"checks\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_component_errors_10m{namespace=\"zuul\",component=\"launcher\"}",
+          "values": "0+0x2 6+0x33 0+0x10"
+        }
+      ],
+      "promql_expr_test": [
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "0m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "20m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "34m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 0
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "40m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "notification health lifecycle: stuck checks",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "up{job=\"ci-observer\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"logs\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"checks\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_stuck_check_runs",
+          "values": "0+0x2 1+0x8 0+0x10"
+        }
+      ],
+      "promql_expr_test": [
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "0m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "5m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "9m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 0
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "15m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "notification health lifecycle: failed scan",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "up{job=\"ci-observer\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"logs\"}",
+          "values": "1+0x46"
+        },
+        {
+          "series": "ci_observer_scan_ok{scan=\"checks\"}",
+          "values": "1+0x2 0+0x8 1+0x10"
+        }
+      ],
+      "promql_expr_test": [
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "0m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "5m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "9m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 0
+            }
+          ]
+        },
+        {
+          "expr": "ci:observer_healthy",
+          "eval_time": "15m",
+          "exp_samples": [
+            {
+              "labels": "{__name__=\"ci:observer_healthy\"}",
+              "value": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
