@@ -31,7 +31,8 @@ testbed_repository=$(repository_of "$dest")
 
 find "$dest" "$config_dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 (cd "$config" && find . -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} "$config_dest/" \;)
-# Compose's node replaces the production k3s provider for the same aid-check-pod-node label. Keep the
+# Compose supplies two check nodes and two separate compute nodes for the testbed
+# window=2 acceptance scenario. Production compute/window remain one. Keep the
 # production base job and playbooks; its real provider is tested on k3s, not Compose. The pipeline
 # changes for the workflow's token are below.
 rm -f "$config_dest/zuul.d/providers.yaml"

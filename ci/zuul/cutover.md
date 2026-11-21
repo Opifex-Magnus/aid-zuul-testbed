@@ -40,7 +40,7 @@ Record links to the live results on #1355. A closed issue alone is not evidence 
 6. Apply the build farm ConfigMap from this PR: `auth.libsonnet` refuses retired Actions tokens.
    Run `deploy/build-farm/check.sh` before applying and confirm box/Zuul access afterwards.
    Retire only the AID Actions runner scale sets after confirming no jobs are using them. Keep the
-   Buildbarn farm, Zuul nodes, post BuildKit, registry, pusher and image-check namespace. They serve Zuul
+   Buildbarn farm, Zuul nodes, registry, pusher and image-check namespace. They serve Zuul
    independently of ARC. Follow the runner inventory below and record the actual host changes.
 
 ## Runner inventory

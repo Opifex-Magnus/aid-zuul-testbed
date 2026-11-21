@@ -69,10 +69,16 @@ the steps (#1341):
   since each of those jobs holds a secret ([publish.md](publish.md)). The [comparison](comparison.md) records the
   cheap and gate coverage gaps of 2026-11-15, which #1520 (check's) and #1521 (gate's, these jobs) close.
 
-Check and gate's non-image jobs share two disposable `aid-check-pod-node` slots in `zuul-nodes`.
-The namespace quota and the trusted `aid-k3s-check-pods` provider's `resource-limits: {pods: 2}`
+Check and gate's non-image jobs share three disposable `aid-check-pod-node` slots in `zuul-nodes`.
+The namespace quota and the trusted `aid-k3s-check-pods` provider's `resource-limits: {pods: 3}`
 must agree. The orchestrator updates that private provider after the quota change merges and the
-farm ramp (#1861) is applied. Gate image and post providers retain one slot each.
+step 3 host and farm ramp (#1885) is applied. Gate image and post providers retain one slot each.
+#1867 will give gate non-image jobs a separate pod; its current proposed 1 GiB / 100m CPU request
+would bring the total to 18656/18048 MiB and 8330/9000m CPU. Step 3 leaves 416 MiB. The
+[orchestrator's #1885 scope decision](https://github.com/kristofk/AIDepartment/issues/1885#decided-by-the-orchestrator-2026-11-19)
+excludes that pod from this ramp: #1867 sizes it from post-step-3 measurements and resolves the
+608 MiB gap in its own change. The current gate estimate and allocation stay unchanged;
+the rendered-budget regression rejects adding that pod without a budget change.
 
 ## Executor resources
 
@@ -171,30 +177,36 @@ Docker Compose on a GitHub-hosted runner, and checks it with ordinary pull reque
    error;
 2. a pull request that adds a job (an `aid-bazel` job building a new target) runs it on itself, and reports success
    on the pull request, while `main` still has no such job;
-3. a pull request that defines a base job in AID's project fails, with Zuul's "Base jobs may only be defined in
+3. a job requesting an unknown label fails with Zuul's exact label-not-found configuration error and no
+   dispatched builds; its proposed library uses equivalent cleanup post-runs so unrelated deprecations cannot
+   hide the diagnostic (#1889);
+4. a pull request that defines a base job in AID's project fails, with Zuul's "Base jobs may only be defined in
    config projects" on the pull request;
-4. a pull request that defines a pipeline in AID's project fails, with Zuul's "Pipelines may not be defined in
+5. a pull request that defines a pipeline in AID's project fails, with Zuul's "Pipelines may not be defined in
    untrusted repos" on the pull request;
-5. a proposed job reads a fake raw farm token in every pre/run/post/cleanup hook under `check`, then fails at the
+6. a proposed job reads a fake raw farm token in every pre/run/post/cleanup hook under `check`, then fails at the
    trusted base guard under `check-external`. The node's probe file remains unchanged, and the executor log must
    identify the guard failure. No external hook executes, including post and cleanup after the failed pre-run;
-6. to 10. the rows of [gate.md](gate.md): a job's timeout; ready means queued, the full jobs in gate and the merge by
-   rebase; the `hold` label; two pull requests at once in gate's window, a flaky failure that starts the one behind
-   it again, and `regate`; a ready pull request that check's result alone brings into gate, before and after a push
-   (gate.md, "Seen working");
-11. a job with a secret, defined in the config project as `deploy/zuul/job-secrets.md` says, gets it in `post` on
+7. a job runs no longer than its timeout;
+8. ready means queued: a draft stays out of gate; once ready, it enters, runs the full jobs and merges by rebase;
+9. the `hold` label keeps a ready pull request out of gate, and takes one out that is already queued;
+10. two pull requests run at once in gate's window; a flaky failure starts the one behind it again, and `regate`
+    retries the failed pull request;
+11. check's result alone brings a ready pull request into gate, before and after a push. Checks 7–11 are the rows
+    of [gate.md](gate.md), "Seen working";
+12. a job with a secret, defined in the config project as `deploy/zuul/job-secrets.md` says, gets it in `post` on
     `main`: its log and its build's artifact show the fixture's SHA-256, never the value. One whose secret may not go
     to `post` is failed by aid-zuul-config's guard, `playbooks/secrets/guard.yaml`, before its run playbook. A job
     with an OIDC secret gets a token Zuul signed, with the claims ThunderBox's pusher checks (`sub`, `pipeline`,
     `job-name`, `aud`, its life) and the issuer its secret names, which the tenant allows, not `[web] root` (#1637).
     Its signature is checked against the keys at `<iss>/oidc/jwks`, as the pusher fetches them ([publish.md](publish.md),
     "The pusher");
-12. three pull requests are refused with Zuul's own words: one that lists that job in `check` ("does not allow
+13. three pull requests are refused with Zuul's own words: one that lists that job in `check` ("does not allow
     post-review job"), one with a job inheriting it ("is final and can not act as a parent"), and one with a job naming
     its secret ("Secrets must be defined in the same project in which they are used"). The workflow's token opens the
     pull requests of checks 1 to 13, and GitHub lets nobody approve their own, so the copy of gate for them leaves out
     its requirement of an approving review ([`sync.sh`](testbed/sync.sh));
-13. the two-agent loop, in a run of its own ([below](#the-two-agent-loop-on-the-test-bed)): gate lets the builder's
+14. the two-agent loop, in a run of its own ([below](#the-two-agent-loop-on-the-test-bed)): gate lets the builder's
     pull request in only once the reviewer approved its head, and Zuul merges it.
 
 Zuul has no route from GitHub there, so the test bed sends Zuul the events GitHub would (`pull_request`,
@@ -346,6 +358,8 @@ without the test bed's build node:
 - **The test bed** ([above](#the-test-bed)), on Zuul itself, for every change to aid-zuul-config or the test bed, and
   to see a change to the library work before Zuul runs on ThunderBox.
 
+Container targets, structural tests, runtime checks and the BuildKit retirement procedure are in [Container images](../../build/images/README.md).
+
 Native providers own every production build label; tenant `aid` disables Nodepool fallback.
 The Compose tenant does too: its `unknown_label_is_refused` scenario requires a configuration failure
 naming an unknown label and no dispatched builds. Existing legacy requests need cancellation and
@@ -358,7 +372,8 @@ For a focused native-launcher regression, dispatch the copied workflow with
 It runs numbered checks 1–3: layout load, a successful real job dispatch, and unknown-label refusal.
 The unknown-label PR converts deprecated `cleanup-run` entries to equivalent cleanup post-runs **in that
 probe's proposed library only** so unrelated warnings cannot hide the real diagnostic (see #1889).
-Production cleanup syntax is unchanged. The assertion requires Zuul's exact `The label "…" was not found.`
+Production jobs now use cleanup post-runs (#1995); the conversion remains compatible
+with older test-bed snapshots. The assertion requires Zuul's exact `The label "…" was not found.`
 wording, a failed check, and zero dispatched builds; merely quoting `label: …` is insufficient.
 The focused run omits gate/secrets scenarios and their whole-run MQTT assertions; it does not replace the
 standard test bed for changes to those paths.

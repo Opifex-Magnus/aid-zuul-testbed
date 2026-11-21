@@ -533,7 +533,7 @@ UNKNOWN_LABEL_JOB = """\
 def unknown_label_is_refused(bed):
     log("3. An unknown label is a configuration error, without a Nodepool request")
     library = bed.git("show", "origin/main:ci/zuul/zuul.d/jobs.yaml")
-    # Proposed configuration only; production cleanup migration belongs to #1889.
+    # Compatibility with older snapshots; current production uses cleanup post-runs (#1995).
     library = re.sub(r"(?m)^    cleanup-run: (.+)$",
                      r"    post-run:\n      - name: \1\n        cleanup: true", library)
     pull = bed.open_pull_request("unknown-label", {
@@ -582,10 +582,10 @@ def container_text(container, path):
 
 
 def nodes_text(path):
-    """The file on each of the test bed's build nodes (compose.yaml's node and node-2), one after the other; a node
+    """The file on each separate check/compute node (compose.yaml), one after the other; a node
     whose job did not run there has none."""
     texts = []
-    for container in ("TESTBED_NODE_ID", "TESTBED_NODE_2_ID"):
+    for container in ("TESTBED_NODE_ID", "TESTBED_NODE_2_ID", "TESTBED_COMPUTE_ID", "TESTBED_COMPUTE_2_ID"):
         result = subprocess.run(["docker", "exec", os.environ[container], "cat", path],
                                 capture_output=True, text=True, timeout=30)
         if result.returncode and "No such file" not in result.stderr:
@@ -603,8 +603,10 @@ def external_job_cannot_read_farm(bed):
     parent: aid-script
     pre-run: ci/zuul/playbooks/farm-pre.yaml
     run: ci/zuul/playbooks/farm-run.yaml
-    post-run: ci/zuul/playbooks/farm-post.yaml
-    cleanup-run: ci/zuul/playbooks/farm-cleanup.yaml
+    post-run:
+      - ci/zuul/playbooks/farm-post.yaml
+      - name: ci/zuul/playbooks/farm-cleanup.yaml
+        cleanup: true
 - project:
     check:
       jobs: [{job}]
@@ -1028,11 +1030,11 @@ def main():
     parser.add_argument("--native-launcher", action="store_true",
                         help="run layout, successful dispatch and unknown-label checks only")
     parser.add_argument("--loop-pull", type=int,
-                        help="the builder's pull request: run the two-agent loop's check (13) alone, on it")
+                        help="the builder's pull request: run the two-agent loop's check (14) alone, on it")
     args = parser.parse_args()
-    bed = Testbed(args)
     if args.loop_pull and args.native_launcher:
         parser.error("--loop-pull and --native-launcher are mutually exclusive")
+    bed = Testbed(args)
     if args.native_launcher:
         checks = [layout_loads, new_job_runs_speculatively, unknown_label_is_refused]
     elif args.loop_pull:

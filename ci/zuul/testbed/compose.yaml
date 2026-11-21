@@ -132,5 +132,13 @@ services:
   node-2:
     <<: *node
 
+  # Dedicated compute pool: two for the testbed speculative-window=2 scenario.
+  # Production compute admission/window stay one. Never relabel the check nodes.
+  gate-compute:
+    <<: *node
+
+  gate-compute-2:
+    <<: *node
+
 networks:
   zuul: {}

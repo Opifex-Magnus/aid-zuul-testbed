@@ -23,7 +23,7 @@ How the build-and-review loop (`docs/review-loop.md`) runs on Zuul.
   Ready and the approval are both triggers, so whichever comes second enqueues it. Only the reviewer, or Kristóf, can
   approve: GitHub lets nobody approve their own pull request, and the accounts with write access are `kristofk`,
   `Opifex-Magnus` and `Artifex-Prime`. Without the approval, ready, a comment review or a `regate` comment lets in
-  nothing (the test bed's check 13).
+  nothing (the test bed's check 14).
 - **An approval covers the head it approved.** Zuul reads each reviewer's newest review, not the commit it was of
   (its GitHub driver's `getPullReviews`). What keeps a push after the approval from riding in on it is GitHub: from
   #1355, `main`'s protection dismisses an approval when a commit is pushed
@@ -115,25 +115,56 @@ to draft or adding `hold` dequeues it, though its check may remain pending until
 
 ## The full job on a build node
 
-`aid-bazel-everything` runs `bazel --host_jvm_args=-Xmx3g test --config=ci --config=zuul //...` on the farm. The Zuul
-node has no compiler and no local fallback. The farm toolchain, dependency metadata and
+#1867's routing change selects `aid-gate-compute` (`aid-gate-compute-pod-node`)
+for `aid-bazel-everything`, with the unchanged `-Xmx3g`, remote execution and
+minimal downloads. All other non-image gate jobs, including plan, inherit the
+same compute pool from `aid-gate`; image jobs retain `aid-gate-image` and staging
+retains `aid-staging`. Check jobs still inherit trusted base's check pool.
+
+**Activation hold:** the orchestrator must install the merged prerequisites from
+#1915 and its exact trusted provider companion, then prove the new label, farm
+dev-only identity and deletion on success/abort. Production compute admission,
+image admission, gate window and scratch semaphore remain one. The one compute
+slot serializes non-image gate jobs without consuming check slots; it does not
+add farm worker capacity. Measure gate wall-clock and check queue latency at
+activation, accepting the longer serial critical path explicitly.
+
+The full OCI graph's external repositories can occupy client storage despite
+minimal remote output downloads. #1814 documented eviction with a 5 GiB home;
+the first #1926 activation gate confirmed that limit failed three times. The
+orchestrator's revised decision selects 11 GiB home / 12 GiB scratch and retires
+both idle BuildKits, preserving all other tenant quotas. The current model and
+headroom are recorded in the [compute README](../../deploy/zuul/gate-compute-node/README.md).
+This is a capacity choice to validate, not a completed production activation proof.
+The footprint prerequisite #2002 supplies the measured cache/compact-log settings
+([investigation](gate-compute-storage.md)); it must merge before this routing
+activation is explicitly released by the orchestrator.
+
+**Keep draft and hold; do not release the routing hold** until review, the
+orchestrator's live PodTemplate apply, and explicit gate release. Activation needs
+full graph proof within that envelope
+or a reviewed capacity/storage change. If it is evicted again, the next step is
+raising the kubelet dataset, not shrinking other tenants. Do not regate without
+explicit authorization.
+
+The farm toolchain, dependency metadata and
 `.bazelrc` own execution; build logic stays in Bazel and repository scripts. The production
 proof is build `a52d31e7a74846b386930c3495c54115` on 2026-11-15: 1822 actions, 30 tests passed,
 21 executed, in 1519.002 seconds (#1485). It proves that Bazel job, not coverage of other gate jobs.
 
 The full OCI graph in #1701 exhausted the Bazel Java heap after action completion (#1842,
 exit 33); no Kubernetes OOMKill, eviction or memory pressure was observed. The job explicitly selects the existing
-6 GiB gate-image node, leaving 3 GiB outside the explicit 3 GiB heap for native JVM memory,
-client/repository work, SSH and logs. The 128 MiB scheduling request and namespace allocation
-stay unchanged. The repository-wide 25% heap policy remains the default for other jobs.
-The startup override and `nodeset: aid-gate-image` travel together; the general PR node has
+6 GiB compute node, leaving 3 GiB outside the explicit 3 GiB heap for native JVM memory,
+client/repository work, SSH and logs. The compute pool reserves 384 MiB; its 6 GiB hard limit and namespace
+allocation stay unchanged by routing. The repository-wide 25% heap policy remains the default for other jobs.
+The startup override and `nodeset: aid-gate-compute` travel together; the general PR node has
 only 2 GiB and cannot support this heap. Targeted tests check configuration and headroom,
 not whole-graph peak usage: that proof requires a future operator-authorized full gate.
 Sharing this node does not make the Bazel job a scratch-registry client: its Bazel role
 runs `test //...` against the farm/CAS, without image upload or runtime image pulls.
 It takes no `aid-scratch-registry` semaphore. The `gate.sh` operations `image`,
 `aid-images`, `farm-worker` and `zuul-node-image` push scratch images and pull them
-for runtime checks; those lifetimes require the registry semaphore and cleanup-run,
+for runtime checks; those lifetimes require the registry semaphore and cleanup post-run,
 regardless of which nodeset runs them.
 Do not retry the exhausted gate to validate this change.
 
@@ -151,17 +182,69 @@ Zuul retains the failure-rate threshold of 100 so transport retries cannot cause
 whole-invocation breaker abort (#1719). The default `remote` configuration retains its deadlines,
 breaker and local fallback. `ci/bazel-fallback.mjs` covers the old early-abort trigger, retry
 exhaustion despite that threshold, a saturated two-slot queue waiting over 120 seconds, stream
-reconnection through WaitExecution, cancellation of a stalled scheduler, and refused service.
+reconnection through WaitExecution, harness SIGINT interruption of a stalled scheduler (not an actual Zuul/Ansible timeout), and refused service.
 
-The job retains `remote-rpc.pb`, `execution.json` and `build-events.jsonl` under its log URL,
-including when Bazel fails. The RPC log captures method/status/timestamps before the circuit breaker
+The voting `aid-nightly` job runs the full simulator through `ci/zuul/publish/nightly.sh`,
+only at the periodic timer admitted by the nightly clock (04:00 Madrid). The script runs both
+this lab and the full Bazel suite and fails if either fails, so the existing `aid-nightly-report`
+opens/comments on the `ci-nightly` issue for a simulator failure. A separate unreported periodic
+job would not provide that notification. See [publishing](publish.md#the-nightly).
+
+The independent isolated-node proof took 1502 seconds (about 25 minutes).
+The box queue case alone took 981 seconds: it deliberately exceeds the real legacy six-call
+budget (six times the Execution timeout in `build/farm/grpc-service-config.json`, currently
+720 seconds). Scaling that deadline would no longer prove the box's production policy survives
+the full legacy retry budget. We retain this cost once nightly, outside per-push check.
+
+The job selects `aid-nightly-compute` on #1867's compute pool: its 6 GiB memory limit
+accommodates the proof's 4 GiB requirement without assuming the default 2 GiB PR node
+is sufficient. The compute pool now supplies an
+11 GiB home / 12 GiB ephemeral ceiling; see [the nightly rollout](publish.md#the-nightly).
+This changes no live node template or quota. The node supplies pinned Node and Bazelisk, and
+`.bazelversion` selects Bazel. `ci/zuul/bazel-fallback.sh` uses a private checkout and Bazel output
+root, ignores machine/user rc files and targets only loopback REAPI servers. Its 50-minute
+watchdog sits inside the nightly job's inherited two-hour timeout, which bounds both the lab
+and the full suite. No shared live farm is saturated or modified by the lab.
+
+The job writes raw `remote-rpc.pb`, compact `execution.log` and `build-events.jsonl` outside the fetched
+tree, in `~/zuul-bazel-diagnostics`. `ci/bazel-job.py` runs Bazel and then exports bounded test XML,
+test logs and compressed diagnostics under `~/zuul-output/logs/bazel`, even after a nonzero exit.
+It never exports OCI layouts, runfiles or the entire `bazel-testlogs` tree. The only undeclared
+outputs exported are bounded Node crash JSON (`test.outputs/node-crash/{before,after,report.*}.json`);
+cores, symlinks and arbitrary undeclared payloads stay excluded (#2040).
+The byte/file/count/preview bounds have one source, `ci/bazel-log-budget.json`: currently at most
+32 MiB including the manifest, with at most 512 recorded files in a fixed-depth tree. This leaves
+room below the executor's independent 250 MB per-job default for checkout, Ansible and console logs;
+it does not increase that limit or guarantee the size of unrelated executor files (#1893).
+Small RPC/BEP logs are complete `.gz` files; decompress before decoding. The compact
+`execution.log` contains zstd-compressed ExecLogEntry protobufs and is copied intact
+only when it fits the per-file and remaining total budget. The measured cold full
+log slightly exceeded 4 MiB and was omitted; do not assume it is fetched. Older
+JSON-log callers remain supported by the general exporter. Oversized text gets
+an explicitly marked head/tail preview; oversized binary/XML is omitted. `manifest.json` records
+original sizes, paths and omission/preview status. An omitted trace is not evidence of zero actions.
+The RPC log captures method/status/timestamps before the circuit breaker
 can refuse later calls; the other logs distinguish actual remote execution, cached results and unrun
-targets. The trusted base job fetches the node's `~/zuul-output/logs` in post-run. See the farm's
+targets when retained. The trusted base fetches only `~/zuul-output/logs` in post-run. See the farm's
 [RPC abort procedure](../../deploy/thunderbox/build-farm.md#an-rpc-circuit-breaker-abort)
 for decoding, correlation and recovery requirements. A breaker abort is not a test pass or a test flake.
 The BEP keeps local file paths rather than uploading referenced files through the failed farm; those
 paths describe the build node and are not retained test-output attachments. A failure before execution
 can leave an empty execution log, and interruption can leave partial logs; neither proves a target passed.
+
+The full job overrides `--repository_cache=` to avoid keeping downloaded blobs
+next to materialized repositories in a disposable home, and uses compact execution
+logging instead of multi-GiB JSON finalization. The Bazel role indexes the read-only
+shared SHA-256 downloads into `~/zuul-shared-distdir` using symlinks, and the full job
+passes it as `--distdir`. Bazel verifies the digest before reading a candidate;
+OCI URL names (`sha256:<hex>`) match these aliases. Seeded blobs require no blob/manifest
+HTTP and take no duplicate payload space in home. rules_oci still requests an
+uncacheable registry token first; `--repo_env=OCI_GET_TOKEN_ALLOW_FAIL=1` lets a
+failed exchange (including 429) fall through to the digest-verified distdir read.
+Unseeded blobs still fetch upstream, where the registry enforces authentication. Other jobs retain their seeded caches. See [cache seeding](oci-downloads.md). The [storage investigation](gate-compute-storage.md)
+records the measured peak and the 170-test cold reproduction with the unchanged
+3 GiB heap. This settings prerequisite leaves all nodesets and pod budgets unchanged;
+compute routing stays held in #1926 until the orchestrator releases its activation.
 
 ## The gate's jobs
 
@@ -181,22 +264,22 @@ changed files plans everything, as the queue's does. The plan is written with th
 **What fails the gate.** A planned job that fails, times out, or gets no node (`NODE_FAILURE`) fails the buildset, and
 Zuul merges nothing. A step left out only because the plan left it out is `SKIPPED`, as a job the plan left out is
 skipped on GitHub Actions. If the plan itself fails, every job behind it is skipped and the gate fails. A planned step
-whose node lacks what it needs fails: an image job checks its node's BuildKit and endpoints, staging its Docker, the
+whose node lacks what it needs fails: an image job checks its node's Bazel and endpoints, staging its Docker, the
 ingress suite that `aid` finds the Swift runtime, before they start. Nothing passes for want of Docker.
 
 | CI's queue run (`ci.yml`) | Gate's job | Planned when (`ci/affected.mjs`) | Node |
 | --- | --- | --- | --- |
-| the plan job's quarantine check and plan | `aid-gate-plan` | always | the PR node |
-| `bazel`: `bazel test //...` | `aid-bazel-everything` | `bazel`: Swift inputs | the PR node, on the farm ([The full job](#the-full-job-on-a-build-node)) |
-| `bazel`: the architecture's actual-edge check | `aid-bazel-graph`: `node ci/bazel-graph.mjs` | `bazel` | the PR node |
-| `ingress`: the ingress suite | `aid-gate-ingress`: `aid` built on the farm, then [`ci/ingress-suite.sh`](../ingress-suite.sh) | `ingress`, whole or the applications' part | the PR node |
+| the plan job's quarantine check and plan | `aid-gate-plan` | always | the gate compute node |
+| `bazel`: `bazel test //...` | `aid-bazel-everything` | `bazel`: Swift inputs | the gate compute node, on the farm ([The full job](#the-full-job-on-a-build-node)) |
+| `bazel`: the architecture's actual-edge check | `aid-bazel-graph`: `node ci/bazel-graph.mjs` | `bazel` | the gate compute node |
+| `ingress`: the ingress suite | `aid-gate-ingress`: `aid` built on the farm, then [`ci/ingress-suite.sh`](../ingress-suite.sh) | `ingress`, whole or the applications' part | the gate compute node |
 | `images`, one per application (`app-image.yml`) | `aid-gate-image-<app>`, one per `apps/<app>/ci/check-image.sh` | `images` names it | the gate's image node |
 | `release-folder` and `aid-images` | `aid-gate-aid-images`: `deploy/release-folder.sh`, then AID's three images | `aid_images` | the gate's image node |
 | `farm-worker` | `aid-gate-farm-worker`: `node ci/build-farm-worker.mjs build` | `farm_worker` | the gate's image node |
 | `zuul-node-image` | `aid-gate-zuul-node-image`: `node ci/zuul-node-image.mjs build` | Zuul's infrastructure check | the gate's image node |
-| `infra-checks` | `aid-gate-infra-build-farm`, `aid-gate-infra-zuul`: `ci/infra-check.sh <check>` | `infra_checks` names it | the PR node |
+| `infra-checks` | `aid-gate-infra-build-farm`, `aid-gate-infra-zuul`: `ci/infra-check.sh <check>` | `infra_checks` names it | the gate compute node |
 | `staging` (and its release folder) | `aid-gate-staging`: `deploy/release-folder.sh`, then `deploy/test/staging/run.sh` | `staging`: `VERSION` changed | the staging node |
-| `quarantine-swift`, `quarantine-node` (not blocking) | `aid-gate-quarantine-swift`, `aid-gate-quarantine-node`, `voting: false` | a test is in quarantine | the PR node |
+| `quarantine-swift`, `quarantine-node` (not blocking) | `aid-gate-quarantine-swift`, `aid-gate-quarantine-node`, `voting: false` | a test is in quarantine | the gate compute node |
 
 [`check.mjs`](check.mjs) holds gate's list in [`zuul.d/project.yaml`](zuul.d/project.yaml) to the plan's jobs
 (`node ci/zuul/gate.mjs jobs`), each behind `aid-gate-plan`, on its node, and only the quarantine runs not voting.
@@ -209,18 +292,27 @@ build's logs (`quarantine-swift.json`, `quarantine-node.json`); `node ci/quarant
 GitHub Actions' artifacts. The cheap layer's steps (the Node suites, the CI and workflow policy tests) are check's
 (#1520).
 
-**The nodes.** The PR node ([`deploy/zuul/node/`](../../deploy/zuul/node/README.md)) runs Bazel's, the ingress
-suite's, the infrastructure checks' and the quarantine runs' jobs, sharing two disposable slots with check,
-with the farm's `dev` credential; its
-image carries the Swift runtime libraries, without a compiler, for the farm-built `aid` the ingress suite starts. The
-gate's image node ([`deploy/zuul/gate-node/`](../../deploy/zuul/gate-node/README.md)) runs the image jobs: the post
-node's image, with a BuildKit of its own ([`deploy/zuul/gate-buildkit/`](../../deploy/zuul/gate-buildkit/README.md)),
-the scratch registry and the image-check namespace, with no publishing secret. Its projected `aid-build-farm`
-token is mounted but unused until #1701: exact subject `system:serviceaccount:zuul-gate:gate` maps to
-`zuul-gate`/dev, while only trusted `system:serviceaccount:zuul-post:post` maps to `zuul-post`/main.
-The PR node stays `zuul-pr`/dev; each identity is revoked separately through `farm-revoked`.
-[Prerequisite deployment](../../deploy/zuul/image-build-prerequisites/README.md) preserves BuildKit and current
-consumers; only the orchestrator releases the held switch after its live dependencies. The staging node
+**The nodes.** The gate compute node
+([`deploy/zuul/gate-compute-node/`](../../deploy/zuul/gate-compute-node/README.md)) runs the plan,
+full Bazel build, graph, ingress, infrastructure and quarantine jobs. Nodeset `aid-gate-compute`
+selects label `aid-gate-compute-pod-node`; its dedicated bounded provider admits one disposable pod.
+Its PR-node image carries the Swift runtime libraries, without a compiler, for the farm-built `aid`
+the ingress suite starts. Its projected `aid-build-farm` token uses exact subject
+`system:serviceaccount:zuul-gate-compute:compute`, mapped to client `zuul-gate-compute`, tier `dev` only.
+It holds no image-upload, image-check or publishing credentials. The activation/storage hold
+[in The full job](#the-full-job-on-a-build-node) applies before any routing switch.
+
+The PR node ([`deploy/zuul/node/`](../../deploy/zuul/node/README.md)) serves check using its own
+check-provider slots and `zuul-pr`/dev identity; gate compute jobs no longer consume those slots.
+The gate image node ([`deploy/zuul/gate-node/`](../../deploy/zuul/gate-node/README.md)) runs image jobs
+on its separate single slot: the post node's image, the build farm, scratch registry upload access
+and the image-check namespace, with no publishing secret. Its projected token uses exact subject
+`system:serviceaccount:zuul-gate:gate`, mapped to `zuul-gate`/dev, while only trusted
+`system:serviceaccount:zuul-post:post` maps to `zuul-post`/main. Each client identity is revoked
+separately through `farm-revoked`.
+[Prerequisite deployment](../../deploy/zuul/image-build-prerequisites/README.md) prepares these grants;
+only the orchestrator releases the held switch after its live dependencies.
+[Container images](../../build/images/README.md) lists the Bazel targets and remaining runtime checks. The staging node
 ([`deploy/zuul/staging-node/`](../../deploy/zuul/staging-node/README.md)) is Docker, for staging alone.
 Every check/gate/post job runs in a fresh disposable pod. `gate.sh` creates job-local temporary work;
 it does not inspect or terminate earlier processes, repair a reused state directory, or shut down a warm
@@ -236,13 +328,13 @@ its placement and the node is provided. Keep that job required for releases. The
 rollout procedure below records the dependencies; current cutover ownership and evidence are
 in [cutover.md](cutover.md).
 
-0. **Kristóf's decisions**: the gate's image node's 128 MiB and its BuildKit's 2560 MiB of ThunderBox's node memory,
+0. **Kristóf's decisions**: the gate's image node's 128 MiB of ThunderBox's node memory,
    beyond the node's cap as it stands; and where the staging node runs
    ([`deploy/zuul/staging-node/`](../../deploy/zuul/staging-node/README.md), "Undecided").
 1. **The PR node's image** (the admin): the node image from a `main` with this change, which carries the Swift
    runtime, applied to the PR node ([`deploy/zuul/node/README.md`](../../deploy/zuul/node/README.md), "Applying it").
-2. **The gate's image node and its BuildKit** (the admin, after a heads-up to the orchestrator; ThunderBox's session
-   for its grants): their READMEs' "Applying it".
+2. **The gate's image node** (the admin, after a heads-up to the orchestrator; ThunderBox's session
+   for its grants): its README's "Applying it" and the [Bazel image rollout](../../build/images/README.md#rollout-after-merge).
 3. **The staging node**, as step 0 decides.
 4. **aid-zuul-config** (the orchestrator merges, after the other bot's review): the labels `aid-gate-pod-node` and
    `aid-staging-node`, with SSH host-key verification (staging pins its static key; disposable gate/post
@@ -260,3 +352,9 @@ Node suites are Bazel tests (#1313): `aid-cheap-checks` selects `//:node_<suite>
 `aid-bazel-everything` includes them through `//...`, and `aid-gate-quarantine-node` invokes the manual uncached
 `//:node_quarantine` action. The wrappers execute on the farm with pinned Node; results are Bazel-cached.
 See [README.md](README.md#the-cheap-checks) for inputs, loopback requirements and report retrieval.
+
+Flake recording (#726) keeps raw BEP and the full per-test ledger in
+`~/zuul-flake-results`, outside fetch-output. Only the compact `logs/flake-results.json`
+summary is copied back. Its limit is `perFileBytes` in `ci/bazel-log-budget.json`;
+`ci/bazel-job.py` reserves that much of the same total budget for the sibling summary.
+Overflow is explicit missing evidence, never a clean CI window.

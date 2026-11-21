@@ -5,6 +5,12 @@ The orchestrator owns ThunderBox and trusted `aid-zuul-config`; neither is chang
 `CI_SCRATCH_LIFECYCLE=1` activates owned naming/journaling/deletion. Until coordinated
 activation, image naming and manifest retention retain their previous behavior. Gate
 image jobs nevertheless share the single job-wide `aid-scratch-registry` semaphore.
+They declare `resources-first: true`: Zuul fulfills the node request before acquiring
+this semaphore, so waiting for a pod cannot lock out scratch consumers or maintenance
+(#1939; [Zuul semaphore ordering](https://zuul-ci.org/docs/zuul/14.3.0/config/job.html#attr-job.semaphores.resources-first)).
+Exclusion still covers execution through cleanup. An allocated node may wait for a
+trusted post/maintenance holder; those jobs must not require the gate image node
+while holding this semaphore (that would invert the acquisition order).
 
 ## Lifetime and ownership
 
@@ -27,12 +33,12 @@ are reported, other repositories are still attempted, and the journal is retaine
 
 Consumer lifetime includes probes, checks **and the completed pusher copy** in post.
 Do not delete at the end of post's build stage: later playbooks still need those images.
-Gate's `cleanup-run` calls `ci/zuul/scratch-cleanup.sh <zuul.build>` on success, failure
+Gate's cleanup `post-run` calls `ci/zuul/scratch-cleanup.sh <zuul.build>` on success, failure
 or abort. EXIT traps are only an extra pod cleanup attempt. The script cleans check
 pods, calls the operator's fence hook, then deletes manifests. It propagates errors.
-Zuul can discard cleanup-run failures and limits cleanup to five minutes, so cleanup
-failure cannot be the only interlock: trusted admission MUST recover before the next
-producer. Node loss may also prevent cleanup-run entirely.
+Cleanup post-runs use the job's post-timeout and can be interrupted, so cleanup
+success cannot be the only interlock: trusted admission MUST recover before the next
+producer. Node loss may also prevent the cleanup post-run entirely.
 
 ## Operator hook contract
 
@@ -50,7 +56,7 @@ Its commands receive `CI_SCRATCH_REGISTRY`, `CI_SCRATCH_STATE`, `GITHUB_RUN_ID`,
 - `fence`: stop/cancel this attempt's BuildKit writers and wait until they cannot
   commit an upload, and stop/wait for its check/pusher consumers. It must not merely
   kill the SSH client or inspect an idle queue. Only then authorize manifest deletion.
-  Gate cleanup-run calls it; trusted post cleanup-run uses the same script/hook.
+  Gate cleanup post-run calls it; trusted post cleanup post-run uses the same script/hook.
   Repeated fencing must be idempotent. Failure leaves maintenance admission closed.
 
 Each command atomically writes `$CI_SCRATCH_STATE/admission.json` only after success:
@@ -69,9 +75,12 @@ stopped. Keep durable maintenance failure state outside the disposable job pod.
 ## Required cross-repository changes and rollout order
 
 1. **ThunderBox `ci/scratch-registry.yaml`:** enable manifest DELETE with
-   `storage.delete.enabled: true`; preserve the 8 GiB sizeLimit and scratch-status
-   monitoring; provide a safe stopped/readonly maintenance path and API access for
-   the gate/post node clients to list tags, read and delete manifests in owned repos.
+   `storage.delete.enabled: true`; keep sizeLimit within the scratch allocation from
+   `externalMiB["arc-scratch"]` in
+   [`deploy/zuul/scratch-allocation.json`](../../deploy/zuul/scratch-allocation.json)
+   and preserve scratch-status monitoring; provide a safe stopped/readonly maintenance
+   path and API access for the gate/post node clients to list tags, read and delete
+   manifests in owned repos.
    Verify registry network policy permits these clients, not only their BuildKit pods.
 2. **ThunderBox `ci/janitor.mjs`:** remove idle-read-then-restart authority from
    `rotate-scratch`. GC and fallback rotation must acquire the same exclusion and
@@ -87,11 +96,11 @@ stopped. Keep durable maintenance failure state outside the disposable job pod.
    request the **same tenant** job semaphore `aid-scratch-registry` (max 1). AID declares
    it; do not define a conflicting second semaphore. Use job-wide semaphores, not a
    run-playbook-only lock. Post's trusted pre-run invokes `admit` with the durable state
-   env above; its cleanup-run invokes `ci/zuul/scratch-cleanup.sh <zuul.build>` with
+   env above; its cleanup post-run (`cleanup: true`) invokes `ci/zuul/scratch-cleanup.sh <zuul.build>` with
    the same env, after all build/push/record playbooks. Ensure the node image carries
    the control hook and credentials needed only by the trusted controller. Inspect
-   Zuul's effective inherited job: child cleanup-run executes before parent cleanup.
-   Do not place fencing only in a later parent cleanup-run.
+   Zuul's effective inherited job: child cleanup post-run executes before parent cleanup.
+   Do not place fencing only in a later parent cleanup post-run.
 5. **Activation:** prepare the above from merged commits using normal operator rollout
    checks. Drain existing gate/post jobs and disable/drain every old Actions/manual
    scratch producer/consumer. Verify the complete producer inventory participates;
@@ -123,6 +132,6 @@ DELETE or infrastructure apply is performed by these tests.
 
 Zuul's upstream [job](https://zuul-ci.org/docs/zuul/latest/config/job.html) and
 [semaphore](https://zuul-ci.org/docs/zuul/latest/config/semaphore.html) references define
-job-wide acquisition and cleanup-run behavior. The operator must additionally prove
+job-wide acquisition and cleanup post-run behavior. The operator must additionally prove
 the installed scheduler/executor version keeps the slot through cleanup and that a
 crash/retry cannot bypass durable maintenance admission.

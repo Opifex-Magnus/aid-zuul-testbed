@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // What Zuul's publishing jobs do on GitHub (ci/zuul/publish.md), with the App aid-release's token from
-// CI_GITHUB_TOKEN_FILE: the calls GitHub Actions' jobs make through actions/github-script, here through
-// ci/github-rest.mjs, to the same functions.
+// CI_GITHUB_TOKEN_FILE, through ci/github-rest.mjs and ci/aid-release.mjs's publishing functions.
 //
 //   node ci/zuul/publish/github.mjs release <released dir>   the GitHub Release aid-v<version>, from the entry and assets
 //   node ci/zuul/publish/github.mjs report <version>          a failed release's issue (CI_RUN_URL: the build)
@@ -29,7 +28,7 @@ export async function main(args, env = process.env, api = () => client(env)) {
     return `Released ${entry.release} at ${entry.commit}: ${release.html_url}`;
   }
   if (command === "report" && rest.length === 0) {
-    const { number, created } = await reportFailure(api(), REPO, { version: value || null, runUrl: env.CI_RUN_URL || "(no build URL)", ci: "zuul" });
+    const { number, created } = await reportFailure(api(), REPO, { version: value || null, runUrl: env.CI_RUN_URL || "(no build URL)" });
     return `${created ? "Opened" : "Commented on"} issue #${number}.`;
   }
   throw new Error("usage: github.mjs release <released dir> | report <version>");

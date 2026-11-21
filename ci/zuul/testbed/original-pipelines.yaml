@@ -335,6 +335,8 @@
 # ci/nightly.mjs). Zuul's timer has no time zone: it fires in the scheduler's, UTC; 04:00 in Madrid is 02:00 UTC in
 # summer (CEST) and 03:00 in winter (CET). Two pipelines rather than one with both times, since Zuul tells a job its
 # pipeline and not when its timer fired: an item that waits for its node past the other time keeps its decision.
+# High precedence wins the next free compute slot ahead of normal-precedence gate requests (#2051).
+# It does not preempt a running gate or reserve daytime capacity.
 # Post-review, as post: what runs is main, merged and reviewed, and the report job has a secret. No reporter: a timer's
 # item has no pull request; aid-nightly-report writes the result to AIDepartment's ci-nightly issue, and each build is
 # in Zuul's API (/api/tenant/aid/builds?pipeline=periodic-0200).
@@ -343,7 +345,7 @@
     description: AIDepartment's nightly, at 02:00 UTC (04:00 in Madrid in summer).
     manager: independent
     post-review: true
-    precedence: low
+    precedence: high
     trigger:
       timer:
         - time: '0 2 * * *'
@@ -353,7 +355,7 @@
     description: AIDepartment's nightly, at 03:00 UTC (04:00 in Madrid in winter).
     manager: independent
     post-review: true
-    precedence: low
+    precedence: high
     trigger:
       timer:
         - time: '0 3 * * *'

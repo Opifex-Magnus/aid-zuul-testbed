@@ -5,8 +5,7 @@
 # step runs the same command on both CIs (#1341's rule).
 #
 # From the playbook (aid-zuul-config's playbooks/publish/): ZUUL_PIPELINE, ZUUL_OLDREV, ZUUL_NEWREV, ZUUL_BUILD,
-# ZUUL_BUILD_URL, ZUUL_STATE (a folder that outlives the job's playbooks), the post node's own BuildKit as BUILDKIT_HOST
-# (deploy/zuul/post-buildkit/), and ThunderBox's endpoints as the image runners have them: CI_SCRATCH_REGISTRY,
+# ZUUL_BUILD_URL, ZUUL_STATE (a folder that outlives the job's playbooks), the post node's projected farm credential, and ThunderBox's endpoints as the image runners have them: CI_SCRATCH_REGISTRY,
 # CI_RUN_NAMESPACE, CI_PUBLISH_URL, CI_PUBLISH_AUDIENCE. Each
 # stage gets only the credential it uses, made as its playbook starts: CI_GITHUB_TOKEN_FILE, the App aid-release's token
 # (an hour), in the stages that read or write GitHub (the release's push too, which asks GitHub once before it pushes);
@@ -31,7 +30,15 @@ export GITHUB_RUN_ID=$ZUUL_BUILD GITHUB_RUN_ATTEMPT=1 RUNNER_NAME=zuul-$ZUUL_BUI
 # Trusted pre-run admits once; build, push, record and cleanup share this durable journal.
 export CI_SCRATCH_STATE=${CI_SCRATCH_STATE:-$ZUUL_STATE/scratch}
 export CI_RUN_URL=$ZUUL_BUILD_URL
+# Bazel's workspace wrapper records each test invocation, without passing the stage's
+# credentials to the observer or making decisions in a secret-bearing job.
+export FLAKE_RESULTS_DIR=$HOME/zuul-flake-results FLAKE_RUN_ID=$ZUUL_BUILD
+export FLAKE_EXPORT_DIR=$HOME/zuul-output/logs
+export FLAKE_JOB=${ZUUL_JOB:-post} FLAKE_PIPELINE=$ZUUL_PIPELINE FLAKE_COMMIT=$ZUUL_NEWREV
+export FLAKE_RUN_URL=$ZUUL_BUILD_URL
 mkdir -p "$ZUUL_STATE/tmp" "$HOME/zuul-output/logs"
+# Initialize even when this publishing stage only builds images and runs no Bazel tests.
+node ci/flake-record.mjs init "$FLAKE_RESULTS_DIR" "$FLAKE_EXPORT_DIR" || true
 export RUNNER_TEMP=$ZUUL_STATE/tmp TMPDIR=$ZUUL_STATE/tmp
 printf '{"before":"%s"}\n' "$ZUUL_OLDREV" > "$ZUUL_STATE/event.json"
 export GITHUB_EVENT_PATH=$ZUUL_STATE/event.json

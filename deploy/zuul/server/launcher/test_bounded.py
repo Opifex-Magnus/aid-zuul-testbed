@@ -52,7 +52,7 @@ class Lifecycle(unittest.TestCase):
         return bounded.Create(self.endpoint, self.node, 'np0123456789abc', self.label, None, self.image, None)
 
     def test_ready_node_uses_only_admin_template_and_no_namespace_or_rbac_calls(self):
-        for ns in ('zuul-nodes', 'zuul-gate', 'zuul-post'):
+        for ns in ('zuul-nodes', 'zuul-gate', 'zuul-post', 'zuul-gate-compute'):
             with self.subTest(namespace=ns):
                 self.api.reset_mock()
                 self.endpoint.connection.connection_config['namespace'] = ns
@@ -335,7 +335,7 @@ class Lifecycle(unittest.TestCase):
             self.assertTrue(label.reuse)
             self.assertTrue(label.host_key_checking)
         driver = KubernetesDriver()
-        for part, ns in [('check', 'zuul-nodes'), ('gate', 'zuul-gate'), ('post', 'zuul-post')]:
+        for part, ns in [('check', 'zuul-nodes'), ('gate', 'zuul-gate'), ('post', 'zuul-post'), ('gate-compute', 'zuul-gate-compute')]:
             connection = driver.getConnection(f'aid-{part}-pods', dict(driver='kubernetes', namespace=ns))
             self.assertEqual(bounded.namespace(S(connection=connection)), ns)
 

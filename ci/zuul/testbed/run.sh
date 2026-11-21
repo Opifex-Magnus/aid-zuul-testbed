@@ -98,6 +98,10 @@ echo "== bounded Kubernetes lifecycle against the pinned Zuul runtime"
 docker run --rm --quiet --entrypoint python3 \
   --mount "type=bind,src=$root/deploy/zuul/server/launcher,dst=/bounded,readonly" \
   "$scheduler" /bounded/test_bounded.py
+echo "== observer App authentication against the pinned scheduler PyJWT runtime"
+docker run --rm --quiet --entrypoint python3 -e OBSERVER_RUNTIME_AUTH_TEST=1 \
+  --mount "type=bind,src=$root/deploy/zuul/observability,dst=/observer,readonly" \
+  "$scheduler" -B /observer/observer_test.py
 echo "== MQTT publish does not wait for AID or broker acknowledgment"
 docker run --rm --quiet -i --entrypoint python3 "$scheduler" - < "$here/check-mqtt.py"
 graphql=$(docker run --rm --quiet --entrypoint python3 "$scheduler" -c \
@@ -131,15 +135,17 @@ reports_pid=$!
 
 # A public test fixture, not a credential: mimic the raw token readable by the PR pod's job user.
 # The malicious-hook scenario proves check can read it while check-external executes none of its hooks.
-# On both nodes (compose.yaml), as a job may run on either.
-for node in node node-2; do
+# On every check/compute node (compose.yaml), as probes inspect all nodes.
+for node in node node-2 gate-compute gate-compute-2; do
   "${compose[@]}" exec -T --user root "$node" sh -c \
     'mkdir -p /var/run/farm; printf "testbed-farm-credential\n" > /var/run/farm/token; chmod 444 /var/run/farm/token'
 done
 TESTBED_NODE_ID=$("${compose[@]}" ps --quiet node)
 TESTBED_NODE_2_ID=$("${compose[@]}" ps --quiet node-2)
+TESTBED_COMPUTE_ID=$("${compose[@]}" ps --quiet gate-compute)
+TESTBED_COMPUTE_2_ID=$("${compose[@]}" ps --quiet gate-compute-2)
 TESTBED_EXECUTOR_ID=$("${compose[@]}" ps --quiet executor)
-export TESTBED_NODE_ID TESTBED_NODE_2_ID TESTBED_EXECUTOR_ID
+export TESTBED_NODE_ID TESTBED_NODE_2_ID TESTBED_COMPUTE_ID TESTBED_COMPUTE_2_ID TESTBED_EXECUTOR_ID
 
 echo "== scenario"
 secret_args=()

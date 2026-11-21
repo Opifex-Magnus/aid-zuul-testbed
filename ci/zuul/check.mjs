@@ -17,10 +17,10 @@ const ROOT_CONFIG = ["zuul.yaml", "zuul.d", ".zuul.yaml", ".zuul.d"];
 const LIBRARY = ["aid-bazel", "aid-script"];
 // What a role may do: call a program (Bazel or a script), and check its variables first. The gate's plan role also reads
 // the plan the script wrote and hands its jobs to Zuul (gate.md, "The gate's jobs"), and decides nothing itself.
-const TASK_KEYS = new Set(["name", "when", "ansible.builtin.command", "ansible.builtin.assert"]);
+const TASK_KEYS = new Set(["name", "when", "environment", "failed_when", "ansible.builtin.command", "ansible.builtin.assert"]);
 const ROLE_TASK_KEYS = { "gate-plan": new Set(["name", "ansible.builtin.slurp", "register", "zuul_return"]) };
 // The gate's jobs on the image node, the staging node, and those that block nothing (gate.md, "The gate's jobs").
-const GATE_NODESETS = { "aid-gate-image": /^(aid-bazel-everything$|aid-gate-(image-|aid-images$|farm-worker$|zuul-node-image$))/, "aid-staging": /^aid-gate-staging$/ };
+const GATE_NODESETS = { "aid-gate-image": /^(aid-gate-(image-|aid-images$|farm-worker$|zuul-node-image$))/, "aid-staging": /^aid-gate-staging$/ };
 const NON_VOTING = /^aid-gate-quarantine-/;
 
 const yamlFiles = (folder) => existsSync(folder)
@@ -151,6 +151,7 @@ export function check(root) {
 
   // AID's jobs and their playbooks, and the project stanzas that say which pipeline runs them.
   const jobs = {};
+  const nodesets = {};
   const projects = [];
   for (const file of yamlFiles(at(UNTRUSTED))) {
     const where = posix.join(UNTRUSTED, basename(file));
@@ -158,6 +159,7 @@ export function check(root) {
       if (item.kind === null) { problems.push(`${where}: a top-level line outside a "- kind:" item: ${item.lines[0]}`); continue; }
       if (item.kind === "pipeline") problems.push(`${where}: a pipeline in AID's untrusted project; pipelines are kristofk/aid-zuul-config's`);
       if (item.kind === "project") projects.push({ where, ...projectStanza(item) });
+      if (item.kind === "nodeset") nodesets[attribute(item, "name")] = item.lines;
       if (item.kind !== "job") continue;
       const name = attribute(item, "name");
       if (!name) { problems.push(`${where}: a job with no name`); continue; }
@@ -169,15 +171,34 @@ export function check(root) {
       for (const key of ["pre-run", "run", "post-run", "cleanup-run"]) {
         const path = attribute(item, key);
         if (path === undefined) continue;
-        if (path === "") { problems.push(`${where}: job ${name}'s ${key} is a list; give one playbook`); continue; }
-        if (!path.startsWith(PLAYBOOKS)) problems.push(`${where}: job ${name}'s ${key} ${path} is not under ${PLAYBOOKS}`);
-        else if (!existsSync(at(path))) problems.push(`${where}: job ${name}'s ${key} ${path} does not exist`);
+        if (key === "cleanup-run") { problems.push(`${where}: job ${name} uses deprecated cleanup-run; use post-run with cleanup: true`); continue; }
+        let paths = [path];
+        if (path === "") {
+          // Accept the cleanup dictionary form used by our jobs; reject unknown list shapes.
+          const start = item.lines.indexOf(`    ${key}:`);
+          const block = [];
+          for (const line of item.lines.slice(start + 1)) {
+            if (/^    \S/.test(line)) break;
+            if (!/^\s*(#|$)/.test(line)) block.push(line);
+          }
+          if (key !== "post-run" || !block.length || block.length % 2 ||
+              block.some((line, i) => i % 2 ? line !== "        cleanup: true" : !/^      - name: \S+$/.test(line))) {
+            problems.push(`${where}: job ${name}'s ${key} is a list; give one playbook or cleanup post-run dictionaries`);
+            continue;
+          }
+          paths = block.filter((_, i) => i % 2 === 0).map(line => line.slice("      - name: ".length));
+        }
+        for (const path of paths) {
+          if (!path.startsWith(PLAYBOOKS)) problems.push(`${where}: job ${name}'s ${key} ${path} is not under ${PLAYBOOKS}`);
+          else if (!existsSync(at(path))) problems.push(`${where}: job ${name}'s ${key} ${path} does not exist`);
+        }
       }
     }
   }
   for (const [name, job] of Object.entries(jobs)) {
     if (LIBRARY.includes(name)) {
       if (job.parent !== undefined) problems.push(`${job.where}: ${name} inherits ${job.parent}, not the base job`);
+      if (job.nodeset !== undefined) problems.push(`${job.where}: shared library ${name} must leave check routing to trusted base`);
       if (!job.abstract) problems.push(`${job.where}: ${name} is not abstract`);
       continue;
     }
@@ -224,6 +245,22 @@ export function check(root) {
   // The gate (gate.md, "The gate's jobs"): the plan first, then every job the plan can name and no other, each behind
   // the plan, so Zuul runs only those it names; each on the node its step needs, the quarantine runs alone not voting.
   if (project?.pipelines.gate?.length) {
+    // Resolve inheritance for plan and all non-image jobs; an omitted child
+    // nodeset must never silently fall back to trusted base's check pool.
+    const effectiveNodeset = (name) => {
+      const seen = new Set();
+      while (jobs[name] && !seen.has(name)) {
+        seen.add(name);
+        if (jobs[name].nodeset !== undefined) return jobs[name].nodeset;
+        name = jobs[name].parent;
+      }
+      return undefined;
+    };
+    const computeDefinition = nodesets["aid-gate-compute"]?.filter((line) => line.trim() && !line.trim().startsWith("#"));
+    if (JSON.stringify(computeDefinition) !== JSON.stringify([
+      "    name: aid-gate-compute", "    nodes:", "      - name: node", "        label: aid-gate-compute-pod-node",
+    ])) problems.push("aid-gate-compute must declare exactly node on aid-gate-compute-pod-node");
+    if (effectiveNodeset(PLAN_JOB) !== "aid-gate-compute") problems.push(`${PLAN_JOB} must run on aid-gate-compute`);
     const expected = [PLAN_JOB, ...gateJobs(root).map(({ name }) => name)];
     if (JSON.stringify(project.pipelines.gate) !== JSON.stringify(expected)) {
       problems.push(`${project.where}: gate runs ${project.pipelines.gate.join(", ")}; the plan's jobs are ${expected.join(", ")} (node ci/zuul/gate.mjs jobs)`);
@@ -235,8 +272,9 @@ export function check(root) {
       const job = jobs[name];
       if (!job) continue;
       if (job.dependencies !== `[${PLAN_JOB}]`) problems.push(`${job.where}: ${name} does not depend on ${PLAN_JOB} alone (dependencies: [${PLAN_JOB}]), so the plan would not decide whether it runs`);
-      const nodeset = Object.entries(GATE_NODESETS).find(([, pattern]) => pattern.test(name))?.[0];
-      if (job.nodeset !== nodeset) problems.push(`${job.where}: ${name} runs on ${job.nodeset ?? "the PR node"}, not ${nodeset ?? "the PR node"}`);
+      const nodeset = Object.entries(GATE_NODESETS).find(([, pattern]) => pattern.test(name))?.[0] ?? "aid-gate-compute";
+      const actualNodeset = effectiveNodeset(name);
+      if (actualNodeset !== nodeset) problems.push(`${job.where}: ${name} runs on ${actualNodeset ?? "the PR node"}, not ${nodeset}`);
       if ((job.voting === "false") !== NON_VOTING.test(name)) problems.push(`${job.where}: ${name} ${job.voting === "false" ? "does not vote; only the quarantine runs block nothing" : "votes; the quarantine runs block nothing"}`);
       // A job for one application or one check names it last, as the step's <name>.
       const named = app ?? check;

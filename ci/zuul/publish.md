@@ -22,7 +22,7 @@ when published. The unused app tag attachment jobs retire with Actions; no `<app
 been published (Kristóf's #1350 decision). App releases are discovered from their indexed declarations.
 
 **No reporter.** Neither pipeline has a pull request to report on. A failed release opens its issue (`aid-release`'s
-post-run, as `aid-release.yml`'s report job does). The nightly's result goes to its `ci-nightly` issue
+post-run, using `publish/github.mjs report`). The nightly's result goes to its `ci-nightly` issue
 (`aid-nightly-report`). Every build is in Zuul's API and web UI (`/api/tenant/aid/builds?pipeline=post`). AID's events
 from Zuul are #1526's.
 
@@ -35,7 +35,7 @@ playbooks of their own, and each stage gets only the credentials it uses, made a
 
 | Stage | App images (`aid-publish-apps`, [`publish/apps.sh`](publish/apps.sh)) | AID's release (`aid-release`, [`publish/release.sh`](publish/release.sh)) | Credentials |
 | --- | --- | --- | --- |
-| `build` | plan against the index and registry: build/check changed payloads only for unpublished versions; prepare missing current-version entries using their existing registry digests, including after unrelated pushes | the plan (`VERSION` changed, unreleased, the changelog dated); the release folder built clean (`deploy/release-folder.sh`, #1298); the three images built and checked; the keychain asset and the entry written | the App's token, `contents: read`, for the push's base and the tags |
+| `build` | plan against the index and registry: build and structurally test changed payloads with Bazel rules_oci, then runtime-check them, only for unpublished versions; prepare missing current-version entries using their existing registry digests, including after unrelated pushes | the plan (`VERSION` changed, unreleased, the changelog dated); the release folder built clean (`deploy/release-folder.sh`, #1298); the three images built and checked; the keychain asset and the entry written | the App's token, `contents: read`, for the push's base and the tags |
 | `push` | each new image through ThunderBox's pusher; recovered versions need no push | the version still unreleased, then the three images through the pusher | Zuul's token for the pusher; the release also the App's, `contents: read` |
 | `record` | each pushed image's declaration into the release index | the GitHub Release `aid-v<version>`, then its entry into the index | the App's token, `contents: write` |
 | `report` | | after a failure only: the release's issue | the App's token, `issues: write` |
@@ -87,22 +87,54 @@ compiled, has the job's two hours of its own.
 ### The nightly
 
 `aid-nightly` is this repository's job ([`zuul.d/jobs.yaml`](zuul.d/jobs.yaml)), untrusted and with no secret, on the
-PR node with the farm's `dev` credential: [`publish/nightly.sh`](publish/nightly.sh) builds and tests everything (Swift and Node) with
+6 GiB `aid-nightly-compute` nodeset (`aid-gate-compute-pod-node`) with the farm's `dev` credential: [`publish/nightly.sh`](publish/nightly.sh) builds and tests everything (Swift and Node) with
 a BUILD file with no cached test result, on `main`'s head. Zuul's timer has no time zone, so it fires at 02:00 UTC
 (`periodic-0200`) and at 03:00 UTC (`periodic-0300`), and `ci/nightly.mjs`'s clock lets through only the one that is
 04:00 in Madrid (the owner's decision of 2026-10-20, #225), and only while `ci/publisher` names Zuul. Otherwise it
-passes having run nothing. A pipeline per time because Zuul tells a job its pipeline, not when its timer fired: an
-item that waits for the PR node past the other time keeps the decision of the timer that made it, in both jobs.
+passes having run nothing. Before requesting a node, the trusted executor-only
+`aid-nightly-clock` runs the same decision as the reporter and returns `zuul.child_jobs`;
+`aid-nightly` depends on it, so an off-hour item skips compute entirely. The in-node clock
+remains a defensive check. A pipeline per time because Zuul tells a job its pipeline, not when its timer fired: an
+item that waits for its node past the other time keeps the decision of the timer that made it, in both jobs.
 
-The nightly includes Swift and Node tests through Bazel. The remaining jobs are gate's (the
+The nightly includes Swift and Node tests through Bazel and the isolated real-Bazel client
+simulator (`ci/zuul/bazel-fallback.sh`). Both run even if one fails, and either failure fails
+`aid-nightly`, so its existing reporter notices simulator failures too. The simulator's independent
+proof took 1502 seconds (about 25 minutes); it runs once at the admitted nightly timer, not on every
+push. The 981-second box queue case deliberately exceeds the actual legacy six-call deadline
+budget (currently 720 seconds). Compute's 6 GiB memory limit accommodates the proof's 4 GiB
+requirement without assuming the default 2 GiB node is sufficient. The simulator has a 50-minute watchdog;
+the nightly's inherited two-hour job timeout bounds the whole run.
+
+The orchestrator released routing after #1926 merged on 2026-11-20 with its
+activation gate green. The compute pool uses the revised 11 GiB home / 12 GiB
+ephemeral ceiling from that rollout. No new pod reservation or quota is added: nightly shares
+compute's one slot. The periodic pipelines have high precedence, above gate's normal
+precedence: the nightly takes the next free slot rather than waiting behind a steady
+stream of gates. It does not preempt an active job or reserve daytime capacity. It can
+delay non-image gate work, but cannot take the image pod or
+scratch semaphore. The first admitted nightly must confirm the simulator fits that home/tmp and
+scratch envelope; the full-graph activation gate does not prove the simulator's
+footprint. Memory equivalence alone is insufficient.
+Rollback routes nightly back only if image-pod contention is explicitly accepted.
+
+The remaining jobs are gate's (the
 images, the ingress suite and the rest, #1521, [`gate.md`](gate.md), "The gate's jobs"); the nightly does not run them
 yet.
 
 `aid-nightly-report` (aid-zuul-config's `playbooks/nightly/`) runs beside it on the executor, with no node. It decides
 by the same pipeline's time and `ci/publisher` first, with no credential; only then does it make a token with `issues: write`,
 wait for `aid-nightly`'s result in the same buildset from Zuul's API, and close, comment on or open the `ci-nightly`
-issue, as `ci/nightly.mjs report` does on Actions. A nightly with no result within the job's two hours is reported as
-one.
+issue, as `ci/nightly.mjs report` does on Actions. The reporter remains independent of
+the clock job, so a failed clock cannot silently suppress it. It reads the buildset's
+`start_time`: no start within one hour of the pipeline's scheduled slot reports
+`START_TIMEOUT` to the issue, including a late start that has already finished. Once
+started in time, a run can take the existing result-wait budget (110 minutes).
+No node or GitHub token is held during the wait; the issue token is minted afterwards.
+
+The admission graph, precedence and deadline are coordinated in the trusted config
+project (#2051). Merge that reviewed config through the orchestrator; this documentation
+change alone changes no running scheduler and authorizes no live apply.
 
 ## The credentials
 
@@ -127,7 +159,7 @@ and only this token of it (`ci/publish-image.mjs` sends it as the bearer, from `
 | `job-name` | `aid-publish-apps`, `aid-release` or `aid-publish-images` |
 | `exp` | at most three hours after `iat` |
 
-The test bed's check 11 has Zuul 14.3.0 sign such a token in `post` and checks each claim, and its signature against
+The test bed's check 12 has Zuul 14.3.0 sign such a token in `post` and checks each claim, and its signature against
 Zuul's published keys ([`README.md`](README.md), "The test bed"). The change to the pusher is ThunderBox's (its
 repository holds the pusher).
 
@@ -136,8 +168,7 @@ The namespace `zuul` lets in only what its policies name ([`deploy/zuul/namespac
 so AIDepartment's policy `web-pusher` lets the pusher, the pod `pusher` in `arc-release`, reach `web`'s port 9000, and
 no other pod of another namespace (#1601). The pusher's egress to it is ThunderBox's. Without both, every `push` stage
 is refused with 401: the pusher cannot fetch the keys, so the token's key is not one of the issuer's. ThunderBox also lets the post node reach the API for the image check and the pusher
-([`deploy/zuul/post-node/README.md`](../../deploy/zuul/post-node/README.md), "What ThunderBox grants"). Its BuildKit is
-its own, which only it reaches ([`deploy/zuul/post-buildkit/`](../../deploy/zuul/post-buildkit/README.md), #1566).
+([`deploy/zuul/post-node/README.md`](../../deploy/zuul/post-node/README.md), "What ThunderBox grants"). Its image assembly runs on the farm; it uploads the resulting OCI layout directly to scratch.
 
 ## The release index
 
@@ -177,13 +208,10 @@ In order, each step only once the one before is done. Each says whose it is.
 1. **The App's permission** (Kristóf): in `aid-release`'s settings, add **Issues: read and write**, and accept it on
    the installation. Check: aid-zuul-config's `aid-release-credentials` still passes on the next merge.
 2. **The post node** (the admin, after a heads-up to the orchestrator): [`deploy/zuul/post-node/README.md`](../../deploy/zuul/post-node/README.md),
-   "Applying it", with `deploy/build-farm/images/admission.yaml` applied first. Then its BuildKit, with its dataset,
-   the node's mount and the node's memory cap raised by its 2560 MiB (Kristóf's decision on #1566):
-   [`deploy/zuul/post-buildkit/README.md`](../../deploy/zuul/post-buildkit/README.md), "Applying it".
-3. **ThunderBox's grants** (ThunderBox's session): the post node's reach and its binding in the image-check namespace,
-   the scratch registry admitting the post node's BuildKit, the pusher's acceptance of Zuul's token
-   ([The pusher](#the-pusher)), and the endpoints' values. `BUILDKIT_HOST` is the post node's own BuildKit's,
-   `tcp://buildkitd.zuul-post-buildkit.svc:1234`.
+   "Applying it", with `deploy/build-farm/images/admission.yaml` applied first. The Bazel image migration's token,
+   network and retirement sequence is in [the image runbook](../../build/images/README.md#rollout-after-merge).
+3. **ThunderBox's grants**: the post node's API and pusher reach, its binding in the image-check namespace, direct
+   scratch registry upload access and the pusher's acceptance of Zuul's token. No `BUILDKIT_HOST` is consumed.
 
    With these, the admin applies `zuul`'s namespace for its policy `web-pusher` (#1601), from a checkout of `main` that
    has it: `kubectl kustomize deploy/zuul/namespace | ssh thunderbox 'sudo docker exec -i ci-k3s-1 kubectl apply -f -'`.
@@ -227,11 +255,10 @@ merge into `aid-zuul-config`**, explicitly reload tenant `aid` before re-enqueui
 configuration. A successful `check` loads the proposed configuration for that item; it does not prove the merged
 tenant layout is live. An empty `/api/tenant/aid/config-errors` alone does not prove freshness either.
 
-From a box with the tenant credential (or the admin, using `ssh thunderbox`):
+From clean merged main, the admin reloads the tenant; bots can still read scheduler logs and config errors:
 
 ```sh
-export KUBECONFIG=~/.kube/devinfra.yaml
-kubectl -n zuul exec deploy/scheduler -- zuul-scheduler tenant-reconfigure aid
+ssh thunderbox 'sudo docker exec -i ci-k3s-1 kubectl -n zuul exec deploy/scheduler -- zuul-scheduler tenant-reconfigure aid'
 kubectl -n zuul logs deploy/scheduler --since=5m
 curl -fsS http://zuul-web:9000/api/tenant/aid/config-errors
 ```
@@ -266,15 +293,14 @@ after an idle interval.
 
 A failed `post` item runs again as an operator enqueues its push once more, through zuul-web's admin API
 ([`deploy/zuul/web.md`](../../deploy/zuul/web.md), "The admin API", #1616). The orchestrator decides it, and runs it or
-has a bot run it; either needs to run a command in web's pod, the tenant's `~/.kube/devinfra.yaml` or the admin's
-`ssh thunderbox`. `<before>` and `<after>` are the push's, both full SHAs: the failed buildset's `refs[0].oldrev` and
+asks the admin to run it from clean merged main through `ssh thunderbox`. Bots cannot exec
+in web or read its signing Secret; do not restore those rights to retry publishing. `<before>` and `<after>` are the push's, both full SHAs: the failed buildset's `refs[0].oldrev` and
 `refs[0].newrev`, which a box reads with `curl -s 'http://zuul-web:9000/api/tenant/aid/buildsets?pipeline=post&limit=5'
 | jq '.[] | {uuid, result, refs}'`.
 
 ```sh
-export KUBECONFIG=~/.kube/devinfra.yaml
-kubectl -n zuul exec -i deploy/web -- sh -s <who> enqueue-ref --tenant aid --pipeline post \
-  --project kristofk/AIDepartment --ref refs/heads/main --oldrev <before> --newrev <after> < deploy/zuul/admin-api.sh
+ssh thunderbox 'sudo docker exec -i ci-k3s-1 kubectl -n zuul exec -i deploy/web -- sh -s <who> enqueue-ref --tenant aid --pipeline post \
+  --project kristofk/AIDepartment --ref refs/heads/main --oldrev <before> --newrev <after> ' < deploy/zuul/admin-api.sh
 ```
 
 It prints nothing but zuul-admin's deprecation warning, and exits 0, once Zuul has the event; a new `post` buildset for

@@ -192,7 +192,7 @@ case "$command" in
         def valid:
           . as $s |
           .apiVersion == "v1" and .kind == "Secret" and
-          (["zuul","zuul-executor","zuul-nodes","zuul-gate","zuul-post","build-farm"] | index($s.metadata.namespace)) != null and
+          (["zuul","zuul-executor","zuul-nodes","zuul-gate-compute","zuul-gate","zuul-post","build-farm"] | index($s.metadata.namespace)) != null and
           (.metadata.name | type == "string" and test("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")) and
           (.type == "Opaque" or .type == "kubernetes.io/tls") and
           (.data | type == "object" and length > 0 and all(.[]; type == "string" and test("^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")));

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cleanup-run entry point; trusted post jobs pass their durable CI_SCRATCH_STATE/endpoints.
+# cleanup post-run entry point; trusted post jobs pass their durable CI_SCRATCH_STATE/endpoints.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 build=${1:?Zuul build UUID required}

@@ -1,6 +1,26 @@
+# Initialize even lint-only jobs: no tests is distinct from missing evidence.
+- name: Initialize this job's flake record
+  ansible.builtin.command:
+    argv: [node, ci/flake-record.mjs, init, "{{ ansible_user_dir }}/zuul-flake-results", "{{ ansible_user_dir }}/zuul-output/logs"]
+    chdir: "{{ zuul.project.src_dir }}"
+  failed_when: false
+# The full graph disables the writable repository cache for its home budget.
+# Index immutable shared blobs without copying them back into that home (#1994).
+- name: Index read-only shared downloads
+  ansible.builtin.command:
+    argv: [python3, ci/shared-distdir.py, /var/cache/bazel/repository-cache, "{{ ansible_user_dir }}/zuul-shared-distdir"]
+    chdir: "{{ zuul.project.src_dir }}"
 # One Bazel command, in the checkout of the project under test. `bazel` is the node's Bazelisk (#1345), which runs the
 # version .bazelversion pins.
 - name: "bazel {{ bazel_command }}"
   ansible.builtin.command:
-    argv: "{{ ['bazel'] + bazel_startup_flags + [bazel_command] + bazel_flags + ['--'] + bazel_targets }}"
+    argv: "{{ ['python3', 'ci/bazel-job.py', 'bazel'] + bazel_startup_flags + [bazel_command] + bazel_flags + ['--'] + bazel_targets }}"
     chdir: "{{ zuul.project.src_dir }}"
+
+  environment:
+    FLAKE_RESULTS_DIR: "{{ ansible_user_dir }}/zuul-flake-results"
+    FLAKE_EXPORT_DIR: "{{ ansible_user_dir }}/zuul-output/logs"
+    FLAKE_RUN_ID: "{{ zuul.build }}"
+    FLAKE_JOB: "{{ zuul.job }}"
+    FLAKE_PIPELINE: "{{ zuul.pipeline }}"
+    FLAKE_COMMIT: "{{ zuul.commit_id | default('') }}"

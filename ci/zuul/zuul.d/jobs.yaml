@@ -79,8 +79,8 @@
 - job:
     name: aid-bazel-everything
     parent: aid-bazel
-    # The 3 GiB heap below requires the existing 6 GiB node (#1842, also selected by #1701).
-    nodeset: aid-gate-image
+    # The compute pool preserves the 6 GiB limit for the unchanged 3 GiB heap.
+    nodeset: aid-gate-compute
     description: |
       Builds and tests everything with a BUILD file, as CI's `bazel` job does in the merge queue's run, within the
       base job's 2-hour timeout (ci/zuul/gate.md, "Timeouts"), when the gate's plan names it.
@@ -88,19 +88,33 @@
     vars:
       bazel_command: test
       # #1842: the full OCI graph needs more than the default 25% heap.
-      # The selected gate-image node leaves 3 GiB outside heap; no pod budget change.
+      # The selected compute node leaves 3 GiB outside heap; no pod budget change.
       bazel_startup_flags: ["--host_jvm_args=-Xmx3g"]
       # On the build farm, from a node with no compiler (#1345): .bazelrc's `zuul`, the farm by the cluster's address,
       # the workers' installed toolchains and no local fallback, under `dev`; main gets its own nodes (#1351).
       # Keep pre-breaker RPC errors and the selected targets' actual outcomes with the job logs (#1719).
-      # These files are on the node, where the trusted base job's post-run fetches zuul-output/logs
-      # even after the Bazel command fails. No credential-helper output or HTTP headers are logged.
+      # Raw diagnostics stay on the node; bazel-job.py exports only bounded test XML/logs and
+      # compressed diagnostics to the trusted fetch root (#1893). Never copy OCI layouts/runfiles.
+      # No credential-helper output or HTTP headers are logged.
       bazel_flags:
         - --config=ci
         - --config=zuul
-        - "--remote_grpc_log={{ ansible_user_dir }}/zuul-output/logs/remote-rpc.pb"
-        - "--execution_log_json_file={{ ansible_user_dir }}/zuul-output/logs/execution.json"
-        - "--build_event_json_file={{ ansible_user_dir }}/zuul-output/logs/build-events.jsonl"
+        # Explicitly pin the node rc's existing minimal-output policy: image outputs stay on the farm.
+        - --remote_download_minimal
+        # A disposable full-graph client otherwise retains downloaded blobs as well as
+        # extracted repositories/toolchains in its 11 GiB home (#1867).
+        - "--repository_cache="
+        - "--repo_contents_cache="
+        # Read immutable shared downloads without a duplicate writable blob archive.
+        - "--distdir={{ ansible_user_dir }}/zuul-shared-distdir"
+        # rules_oci asks for an uncached token before reading seeded blobs. A 429
+        # there may fall back to anonymous reads; unseeded/private blobs still fail.
+        - --repo_env=OCI_GET_TOKEN_ALLOW_FAIL=1
+        - "--remote_grpc_log={{ ansible_user_dir }}/zuul-bazel-diagnostics/remote-rpc.pb"
+        # Compact logging streams deduplicated, zstd-compressed records instead of
+        # retaining/sorting a multi-GiB JSON execution log at command completion.
+        - "--execution_log_compact_file={{ ansible_user_dir }}/zuul-bazel-diagnostics/execution.log"
+        - "--build_event_json_file={{ ansible_user_dir }}/zuul-bazel-diagnostics/build-events.jsonl"
         # Keep BEP emission independent of an unavailable remote uploader.
         - --nobuild_event_json_file_path_conversion
       bazel_targets: ["//..."]
@@ -118,23 +132,38 @@
 - job:
     name: aid-gate
     parent: aid-script
+    nodeset: aid-gate-compute
     abstract: true
     description: |
       One step of CI's queue layer: `ci/zuul/gate.sh <build> <branch> <step> [<name>]`.
     vars:
       script: ci/zuul/gate.sh
 
-# The image jobs' node (deploy/zuul/gate-node/): its own BuildKit, the scratch registry and the image-check namespace,
-# and no publishing secret. The projected aid-build-farm token is mounted but unused until #1701:
+# The image jobs' node (deploy/zuul/gate-node/): the build farm, scratch registry and image-check namespace,
+# and no publishing secret. The projected aid-build-farm token uses exact subjects:
 # exact zuul-gate:gate maps to zuul-gate/dev; only trusted zuul-post:post maps to zuul-post/main.
 # The PR identity stays zuul-pr/dev. Revoke these independently in farm-revoked. #1733 prepares
 # the routes/tokens without changing consumers; the orchestrator alone releases the cutover hold.
 # The staging node (deploy/zuul/staging-node/): Docker with compose.
+# Gate compute is separate from check admission and scratch-image jobs.
+- nodeset:
+    name: aid-gate-compute
+    nodes:
+      - name: node
+        label: aid-gate-compute-pod-node
+
 - nodeset:
     name: aid-gate-image
     nodes:
       - name: node
         label: aid-gate-pod-node
+
+# #1939: nightly shares #1867/#1926 compute capacity, separate from the image pod.
+- nodeset:
+    name: aid-nightly-compute
+    nodes:
+      - name: node
+        label: aid-gate-compute-pod-node
 
 - nodeset:
     name: aid-staging
@@ -179,8 +208,12 @@
     description: The image of beeper, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, beeper]
 
@@ -190,8 +223,12 @@
     description: The image of browser, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, browser]
 
@@ -201,8 +238,12 @@
     description: The image of build-farm-ui, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, build-farm-ui]
 
@@ -212,8 +253,12 @@
     description: The image of changedetection, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, changedetection]
 
@@ -223,8 +268,12 @@
     description: The image of clock, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, clock]
 
@@ -234,8 +283,12 @@
     description: The image of cloudflare, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, cloudflare]
 
@@ -245,8 +298,12 @@
     description: The image of fastmail, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, fastmail]
 
@@ -256,8 +313,12 @@
     description: The image of gatus, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, gatus]
 
@@ -267,8 +328,12 @@
     description: The image of github, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, github]
 
@@ -278,8 +343,12 @@
     description: The image of hetzner, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, hetzner]
 
@@ -289,8 +358,12 @@
     description: The image of kit, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, kit]
 
@@ -300,8 +373,12 @@
     description: The image of nextcloud, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, nextcloud]
 
@@ -311,8 +388,12 @@
     description: The image of preview, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, preview]
 
@@ -322,8 +403,12 @@
     description: The image of ssh, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, ssh]
 
@@ -333,8 +418,12 @@
     description: The image of stdio-mcp, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, stdio-mcp]
 
@@ -344,8 +433,12 @@
     description: The image of t3codebox, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, t3codebox]
 
@@ -355,8 +448,12 @@
     description: The image of template, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, template]
 
@@ -366,8 +463,12 @@
     description: The image of webhook-relay, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, webhook-relay]
 
@@ -377,8 +478,12 @@
     description: The image of zuul, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul]
 
@@ -388,8 +493,12 @@
     description: The image of zuul-ui, built and checked as its app workflow and post build and check it.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", image, zuul-ui]
 
@@ -401,8 +510,12 @@
       CI's `release-folder` and `aid-images` jobs and AID's release do.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", aid-images]
 
@@ -412,8 +525,12 @@
     description: The build farm's worker image built and checked, as CI's `farm-worker` job does.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", farm-worker]
@@ -424,8 +541,12 @@
     description: Zuul's node image built and checked, as CI's `zuul-node-image` job does.
     dependencies: [aid-gate-plan]
     nodeset: aid-gate-image
-    semaphores: [aid-scratch-registry]
-    cleanup-run: ci/zuul/playbooks/scratch-cleanup.yaml
+    semaphores:
+      - name: aid-scratch-registry
+        resources-first: true
+    post-run:
+      - name: ci/zuul/playbooks/scratch-cleanup.yaml
+        cleanup: true
     timeout: 3600
     vars:
       script_args: ["{{ zuul.build }}", "{{ zuul.branch }}", zuul-node-image]
@@ -486,8 +607,11 @@
 - job:
     name: aid-nightly
     parent: aid-script
+    # The simulator needs >=4 GiB. Use #1867's 6 GiB compute pod, never the
+    # gate image slot. #1926 activated this pool before the nightly routing release.
+    nodeset: aid-nightly-compute
     description: |
-      Everything with a BUILD file, built and tested on main's head, as the nightly does on GitHub Actions, with the
+      Everything with a BUILD file plus the isolated real-Bazel client simulator, on main's head, with the
       clock of ci/nightly.mjs: of the two periodic pipelines, only the one whose time is 04:00 in Madrid runs it.
     vars:
       script: ci/zuul/publish/nightly.sh

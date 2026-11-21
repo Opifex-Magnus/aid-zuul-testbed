@@ -35,7 +35,7 @@ class Resource(statemachine.Resource):
 
 def namespace(endpoint):
     value = endpoint.connection.connection_config.get('namespace')
-    if value not in ('zuul-nodes', 'zuul-gate', 'zuul-post'):
+    if value not in ('zuul-nodes', 'zuul-gate', 'zuul-post', 'zuul-gate-compute'):
         raise ValueError('bounded Kubernetes connection requires an AID node namespace')
     return value
 

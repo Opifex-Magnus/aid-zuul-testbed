@@ -34,7 +34,7 @@ The launcher's ServiceAccount has pod get/list/watch/create/delete and get on `P
 three namespaces. It cannot read Secrets, modify policy/templates/RBAC or create namespaces. Its admin-installed
 NetworkPolicy permits the k3s API route, in addition to existing DNS/proxy/node routes. Jobs receive none of the
 launcher's token. Check's existing projected farm identity stays `zuul-nodes/pr`, and only reaches `dev`; gate/post
-retain their separate image-check accounts, BuildKit daemons and network policies. `check-external` remains blocked
+retain their separate image-check accounts, main/dev farm identities and network policies. `check-external` remains blocked
 by the trusted base guard. The launcher explicitly enables host-key checking when constructing each real Kubernetes provider label: upstream
 disables it for kubectl. The SSH nodescan must succeed and populate executor known_hosts before a job starts.
 
@@ -169,12 +169,14 @@ wrapper/cache setup and gate execution. With the pinned Zuul runtime installed:
 python deploy/zuul/server/launcher/test_bounded.py
 ```
 
-The required node-image `check` stage runs `image/test-download-cache.py` as UID 10001 with its
-installed pinned Bazel, before the image coordinator can push the node image. The probe verifies
-shared hits without HTTP, a successful same-hash/new-canonical-ID download and an unchanged read-only
-share. Its sources live under the declared node-image inputs, so changing the probe selects that image
-check. The voting Node policy suite checks this wiring and the fast cache-layout behavior; it requires
-no nested Bazel or outbound module downloads inside the farm's test action.
+The required OCI node-image runtime probe runs `image/test-download-cache.py` as UID 10001 with
+its checksum-pinned installed Bazel, before publication. The image carries the checkout-shaped fixture
+under `/opt/zuul-node-check`; it needs only loopback, using local stubs for unused toolchain modules
+and an empty file registry instead of external module metadata. arc-imagecheck keeps its closed egress policy.
+The probe verifies shared hits without HTTP, a successful same-hash/new-canonical-ID loopback download
+and an unchanged read-only share. `//build/images:download_cache_test` runs the same fixture with real
+Bazel and unusable outbound proxy settings on the farm. The Node policy suite covers the image wiring
+and the fast cache-layout behavior. Both gate and post checks still require actual image runtime proof.
 
 The Compose testbed runs the same lifecycle suite inside its pinned scheduler image before its ordinary scenarios.
 Those scenarios still substitute static Compose nodes; they do not claim to prove Kubernetes admission or actual

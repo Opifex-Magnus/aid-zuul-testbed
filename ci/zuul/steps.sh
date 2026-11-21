@@ -10,7 +10,7 @@ outputs() { local file=$1; shift; : > "$file"; GITHUB_OUTPUT=$file "$@" | tee -a
 # A key's value in such a file.
 output() { sed -n "s/^$2=//p" "$1" | tail -n 1; }
 
-# app_image <app> <folder>: the application's image built with BuildKit into the scratch registry, started as AID starts
+# app_image <app> <folder>: the application's image built and structurally tested with Bazel rules_oci into the scratch registry, started as AID starts
 # it for its acceptance test (apps/<app>/ci/check-image.sh), and recorded. <folder>/source holds what ci/app-image.mjs
 # read, <folder>/build the image by digest (`image=`).
 app_image() {

@@ -4,6 +4,24 @@ This is a design for a coordinated follow-up implementation and rollout, not a
 provider switch. Merging this document changes no job, quota, identity or live
 infrastructure. The orchestrator owns the trusted-config companion and rollout.
 
+## Implementation sizing after step 3
+
+The #1867 implementation uses the orchestrator's 2026-11-19 post-step-3 decision:
+reserve 384 MiB, not this design's initial 1024 MiB. Step 3 has three check pods,
+three dev workers, 18048 MiB allocatable and a 120 GiB scratch dataset. The rendered
+complete envelope with one compute slot is 17520/18048 MiB and 8335/9000m CPU after recorded BuildKit retirement, including the flake tracker reservation.
+The initial activation evicted full Bazel at a 5 GiB home. The orchestrator's
+revised decision is 11 GiB home / 12 GiB scratch, with both idle BuildKits retired
+and no reduction to other tenants. The intermediate 15/16 GiB proposal exceeded
+allocation; this revision saves 4096 MiB.
+Scratch budget: **116256/116736 MiB**, **480 MiB spare**.
+The remaining 528 MiB memory request headroom is not physical memory headroom.
+Keep the 6 GiB limit and 3 GiB heap. Idle baseline and
+activation stop criteria are recorded in `deploy/zuul/gate-compute-node/README.md`.
+The snapshot arithmetic below remains the original design, superseded by those
+rendered inputs for implementation. Additive prerequisites precede the separate
+held routing PR; the orchestrator owns activation and trusted companion merge.
+
 ## Starting point and intended behavior
 
 At AID `11717e9c`, check has two `aid-check-pod-node` slots in `zuul-nodes`.
@@ -16,7 +34,10 @@ job contending with image builds.
 Add one disposable **gate compute** slot. All gate jobs except scratch image
 jobs and staging use it, including the plan job and `aid-bazel-everything`.
 Check keeps its two slots, the image provider keeps one, the scratch semaphore
-keeps max 1, and the gate window stays 1 until #1817 is live. This isolates
+keeps max 1. The original design held the gate window at 1 until #1817; the
+current trusted `aid-zuul-config/zuul.d/pipelines.yaml` sets window 2, floor 1,
+ceiling 2 (2026-11-20, #1995). This does not add provider slots or increase the
+scratch semaphore. This isolates
 launcher admission; shared farm workers, executor capacity and host pressure
 can still delay checks. It does not promise faster farm execution.
 
@@ -89,14 +110,14 @@ The inputs remain `node-allocation.json`, rendered workload requests and
 `scratch-allocation.json`; the following arithmetic describes AID `11717e9c`,
 not a fresh measurement of the host. Recompute it in the implementation.
 
-Current reservations are 15360/17024 MiB and 7080/9000m CPU, including all
+At `11717e9c`, reservations were 15360/17024 MiB and 7080/9000m CPU, including all
 three farm slots, two check slots, the existing image/post pools, both BuildKits,
 Zuul services, overlapping janitors and the full shared image-check quota.
 One compute slot adds 1024 MiB / 100m: **16384/17024 MiB and 7180/9000m**, leaving
 640 MiB / 1820m unreserved. Count this even when the pool is idle. Do not subtract
 the image node: image jobs still require it and may overlap compute jobs.
 
-Scratch currently reserves 88592/97280 MiB. The new namespace's 6144 MiB makes
+At that revision, scratch reserved 88592/97280 MiB. The new namespace's 6144 MiB makes
 **94736/97280 MiB**, leaving 2544 MiB. Keep the dataset at 100GiB and every
 existing namespace's storage ceiling. Copying the image pool's 16Gi allowance
 would instead require 104976 MiB and fail admission. Two compute slots at the

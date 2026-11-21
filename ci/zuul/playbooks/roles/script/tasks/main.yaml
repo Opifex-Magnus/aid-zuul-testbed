@@ -1,3 +1,9 @@
+# Initialize even lint-only jobs: no tests is distinct from missing evidence.
+- name: Initialize this job's flake record
+  ansible.builtin.command:
+    argv: [node, ci/flake-record.mjs, init, "{{ ansible_user_dir }}/zuul-flake-results", "{{ ansible_user_dir }}/zuul-output/logs"]
+    chdir: "{{ zuul.project.src_dir }}"
+  failed_when: false
 # One script from the repository, in the checkout of the project under test. Only a script under ci/ or scripts/: what
 # CI runs is kept where it can be run and tested outside Zuul too (#1341).
 - name: "The script is under ci/ or scripts/"
@@ -10,3 +16,11 @@
   ansible.builtin.command:
     argv: "{{ ['./' + script] + script_args }}"
     chdir: "{{ zuul.project.src_dir }}"
+
+  environment:
+    FLAKE_RESULTS_DIR: "{{ ansible_user_dir }}/zuul-flake-results"
+    FLAKE_EXPORT_DIR: "{{ ansible_user_dir }}/zuul-output/logs"
+    FLAKE_RUN_ID: "{{ zuul.build }}"
+    FLAKE_JOB: "{{ zuul.job }}"
+    FLAKE_PIPELINE: "{{ zuul.pipeline }}"
+    FLAKE_COMMIT: "{{ zuul.commit_id | default('') }}"
