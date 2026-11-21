@@ -1,0 +1,12 @@
+# Added by the test bed's pull request: a job that runs longer than its timeout.
+- job:
+    name: aid-testbed-timeout
+    parent: aid-script
+    timeout: 30
+    vars:
+      script: ci/testbed-sleep.sh
+
+- project:
+    check:
+      jobs:
+        - aid-testbed-timeout
