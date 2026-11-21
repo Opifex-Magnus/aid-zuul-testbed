@@ -1,0 +1,8 @@
+{
+  "totalBytes": 33554432,
+  "perFileBytes": 4194304,
+  "manifestBytes": 1048576,
+  "previewBytes": 65536,
+  "compressInputBytes": 134217728,
+  "maxEntries": 512
+}
