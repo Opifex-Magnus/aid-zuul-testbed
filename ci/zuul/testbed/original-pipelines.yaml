@@ -159,7 +159,8 @@
       A pull request that is ready for review, approved by an account with write access, has passed check on its head
       and has no "hold" label: tested in order, each on top of those ahead of it, and merged if it passes.
     manager: dependent
-    precedence: high
+    # Reserve high precedence for the nightly start window; gate keeps all daytime slots.
+    precedence: normal
     supercedes: check
     # What may enter, as Mergify's queue conditions today (AIDepartment's ci/zuul/gate.md): ready (no draft), check
     # passed on the pull request's head (Mergify's "Cheap checks passed"), and no hold label. check runs only on a head
